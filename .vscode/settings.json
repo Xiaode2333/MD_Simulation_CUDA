@@ -37,6 +37,7 @@
         "ranges": "cpp",
         "cinttypes": "cpp",
         "valarray": "cpp",
-        "ostream": "cpp"
+        "ostream": "cpp",
+        "iosfwd": "cpp"
     }
 }

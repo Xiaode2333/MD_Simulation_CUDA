@@ -1,8 +1,6 @@
 // md_config.cpp
 #include "../include/md_config.hpp"
-#include <fstream>
-#include <stdexcept>
-#include <fmt/core.h>
+
 
 MDConfigManager::MDConfigManager(struct MDConfig config) : config(config) {
 
@@ -57,7 +55,7 @@ void MDConfigManager::print_config() {
         config.run_name,
         config.load_name,
         config.mpi_world_size,
-        config.THREADS_PER_BLOCK
+        config.THREADS_PER_BLOCK,
     );
 }
 
