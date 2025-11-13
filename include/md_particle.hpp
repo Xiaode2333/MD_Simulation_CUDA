@@ -1,9 +1,12 @@
 #pragma once
 
-#include "../external/matplotlibcpp/matplotlibcpp.h"
+#include "../external/matplotlib-cpp/matplotlibcpp.h"
 
 #include <string>
 #include <vector>
+#include <limits>
+#include <cmath>
+
 
 
 #ifdef __CUDACC__
@@ -22,5 +25,9 @@ struct Particle {
     int type;
 };
 
-void print_particles(const std::vector<Particle>& particles, const std::string& filename,
-     double box_w = NULL, double box_h = NULL, double sigma_aa = 1.0, double sigma_bb = 1.0);
+void print_particles(const std::vector<Particle>& particles,
+                            const std::string& filename,
+                            const double box_w   = 0.0,
+                            const double box_h   = 0.0,
+                            const double sigma_aa = 1.0,
+                            const double sigma_bb = 1.0);

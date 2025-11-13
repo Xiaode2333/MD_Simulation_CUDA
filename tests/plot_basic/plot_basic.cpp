@@ -1,6 +1,13 @@
-// g++ tests/plot_basic/plot_basic.cpp -I. -o tests/plot_basic/plot_basic -Wno-register -I$CONDA_PREFIX/include $(python-config --includes) $(python-config --ldflags) -I$(python -c "import numpy; print(numpy.get_include())") -fPIC
+// g++ tests/plot_basic/plot_basic.cpp -I. \
+ -o tests/plot_basic/plot_basic -Wno-register \
+ -I$CONDA_PREFIX/include $(python-config --includes) \
+ $(python-config --ldflags) \
+ -I$(python -c "import numpy; \
+ print(numpy.get_include())") -fPIC
+
 #include "../../external/matplotlib-cpp/matplotlibcpp.h"
 #include <cmath>
+#include <vector>
 
 namespace plt = matplotlibcpp;
 
