@@ -1,4 +1,9 @@
 // tests/plot_particles/plot_particles.cpp
+
+//g++ tests/plot_particles/plot_particles.cpp src/md_particle.cpp -I. \
+ -o tests/plot_particles/plot_particles -Wno-register \
+ -I"$CONDA_PREFIX/include" $(python-config --includes)  \
+ $(python-config --ldflags)  -I"$(python -c 'import numpy; print(numpy.get_include())')" -fPIC -lfmt
 #include <vector>
 #include <random>
 #include <fmt/core.h>
