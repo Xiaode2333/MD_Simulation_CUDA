@@ -1,5 +1,5 @@
-// g++ tests/plot_basic.cpp -I. -o tests/plot_basic -Wno-register -I$CONDA_PREFIX/include $(python-config --includes) $(python-config --ldflags) -I$(python -c "import numpy; print(numpy.get_include())") -fPIC
-#include "../external/matplotlib-cpp/matplotlibcpp.h"
+// g++ tests/plot_basic/plot_basic.cpp -I. -o tests/plot_basic/plot_basic -Wno-register -I$CONDA_PREFIX/include $(python-config --includes) $(python-config --ldflags) -I$(python -c "import numpy; print(numpy.get_include())") -fPIC
+#include "../../external/matplotlib-cpp/matplotlibcpp.h"
 #include <cmath>
 
 namespace plt = matplotlibcpp;
@@ -31,7 +31,7 @@ int main()
     // Enable legend.
     plt::legend();
     // Save the image (file format is determined by the extension)
-    plt::save("./tests/basic.png");
+    plt::save("./tests/plot_basic/basic.png");
 
     return 0;
 }

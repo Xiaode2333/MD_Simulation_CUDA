@@ -1,3 +1,4 @@
+// md_config.hpp
 #pragma once
 
 #include <string>
@@ -28,6 +29,7 @@ struct MDConfig {
     std::string run_name = "test";
     std::string load_name = ""; // if needed to load from file
 
+    int mpi_world_size = 8;
     int THREADS_PER_BLOCK = 256;
 };
 
@@ -43,6 +45,8 @@ class MDConfigManager {
         static MDConfigManager config_from_json(const std::string& filepath);
 
         void config_to_json(const std::string& filepath);
+
+        void print_config();
     private:
 
 };

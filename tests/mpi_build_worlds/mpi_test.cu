@@ -1,4 +1,4 @@
-// ADD: mpi_cuda_test.cu
+//mpi_cuda_test.cu
 #include <mpi.h>
 #include <cuda_runtime.h>
 

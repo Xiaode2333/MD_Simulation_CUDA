@@ -36,6 +36,7 @@
         "forward_list": "cpp",
         "ranges": "cpp",
         "cinttypes": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "ostream": "cpp"
     }
 }

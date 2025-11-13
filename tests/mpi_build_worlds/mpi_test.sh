@@ -13,8 +13,8 @@ module load OpenMPI
 which nvcc
 which mpicxx
 
-rm -f tests/mpi_test
-nvcc -ccbin mpicxx -arch=sm_89 tests/mpi_test.cu -o tests/mpi_test
+rm -f tests/mpi_build_worlds/mpi_test
+nvcc -ccbin mpicxx -arch=sm_89 tests/mpi_build_worlds/mpi_test.cu -o tests/mpi_build_worlds/mpi_test
 
-srun tests/mpi_test
+srun tests/mpi_build_worlds/mpi_test
 
