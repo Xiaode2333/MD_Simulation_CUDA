@@ -6,7 +6,9 @@
                 "${workspaceFolder}/**",
                 "/home/bryson/miniconda3/envs/cuda_dev/include",
                 "/home/bryson/miniconda3/envs/cuda_dev/include/python2.7",
-                "/home/bryson/miniconda3/envs/cuda_dev/lib/python2.7/site-packages/numpy/core/include"
+                "/home/bryson/miniconda3/envs/cuda_dev/lib/python2.7/site-packages/numpy/core/include",
+                "/usr/include",
+                "/usr/lib/x86_64-linux-gnu/openmpi/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

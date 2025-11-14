@@ -12,10 +12,11 @@
 using json = nlohmann::json;
 
 struct MDConfig {
-    int n_particles;
+    // Global params for all ranks
+    int n_particles_global;
     int n_particles_type0;
-    double box_w; 
-    double box_h; 
+    double box_w_global; 
+    double box_h_global; 
     double T_init; 
     double T_target;
     double SIGMA_AA = 1.0; 
@@ -30,11 +31,25 @@ struct MDConfig {
     double dt = 1e-3;
     double Q = 100.0;
     double save_dt_interval = 0.1;
+    double cutoff = 2.5;
     std::string run_name = "test";
     std::string load_name = ""; // if needed to load from file
-
-    int mpi_world_size = 8;
     int THREADS_PER_BLOCK = 256;
+    int rank_size = 8;
+
+    // This rank's prarams
+    int rank_idx = 0;
+    int n_local;
+    int n_halo_left;
+    int n_halo_right;
+    int n_cap; //buffer capacity
+    int halo_left_cap;
+    int halo_right_cap;
+    int left_rank;
+    int right_rank;
+    double x_min;
+    double x_max;
+    
 };
 
 class MDConfigManager {
