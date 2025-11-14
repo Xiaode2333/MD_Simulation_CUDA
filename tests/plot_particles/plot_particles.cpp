@@ -12,8 +12,8 @@
 #include "../../include/md_particle.hpp"   // contains Particle + print_particles
 
 int main() {
-    const double box_w = 75.0;
-    const double box_h = 75.0;
+    const double box_w = 200;
+    const double box_h = 20;
     const int    N     = 2000;
 
     std::vector<Particle> particles;
