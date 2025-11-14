@@ -34,6 +34,7 @@ __global__ void mark_halo_kernel(const Particle* particles,
     flags_right[idx] = fr;
 }
 
+//device kernel to pack selected halo particles using prefix-sum positions
 __global__ void pack_halo_kernel(const Particle* particles,
                                  int n_local,
                                  const int* flags,
