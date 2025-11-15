@@ -7,12 +7,27 @@
 MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm){
     this->cfg_manager = config_manager;
     this->comm = comm;
+    xi = 0.0;
+
     fmt::print("Starting broadcasting params.\n");
     broadcast_params();
     fmt::print("Params broadcasted.\n");
+
     allocate_memory();
     fmt::print("Memory allocated.\n");
-    init_particles();
+
+    init_particles();//only in rank 0 host h_particles
+
+    //Distribute from host of rank 0 to other ranks' devices
+    distribute_particles_h2d(); 
+    update_halo();
+
+    //Update forces for all ranks, and then collect to host on rank 0
+    cal_forces();
+    update_halo();//copy forces to halos
+    collect_particles_d2h();
+
+    fmt::print("MD simulation env initialized.\n");
 }
 
 MDSimulation::~MDSimulation() = default;
@@ -202,6 +217,8 @@ void MDSimulation::distribute_particles_h2d() {
 
     // Build halos on device and exchange them by MPI (device to device)
     // update_halo();
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 // collect particles from device to host (rank 0 gathers all)
@@ -390,15 +407,15 @@ void MDSimulation::update_halo() {
     if (threads <= 0) {
         threads = 256;
     }
-    launch_mark_halo_kernel(d_local,
+    int blocks = (n_local + threads - 1)/threads;
+    mark_halo_kernel<<<blocks, threads>>>(d_local,
                             n_local,
                             x_min,
                             x_max,
                             Lx,
                             halo_width,
                             thrust::raw_pointer_cast(flags_left.data()),
-                            thrust::raw_pointer_cast(flags_right.data()),
-                            threads);
+                            thrust::raw_pointer_cast(flags_right.data()));
 
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -462,28 +479,28 @@ void MDSimulation::update_halo() {
     // thrust::device_vector<Particle> d_send_left(send_left_count);
     // thrust::device_vector<Particle> d_send_right(send_right_count);
 
+    int blocks = (n_local + threads - 1) / threads;
+
     if (send_left_count > 0) {
-        launch_pack_halo_kernel(
+        pack_halo_kernel<<<blocks, threads>>>(
             d_local,
             n_local,
             thrust::raw_pointer_cast(flags_left.data()),
             thrust::raw_pointer_cast(pos_left.data()),
             send_left_count,
-            thrust::raw_pointer_cast(d_send_left.data()),
-            threads
+            thrust::raw_pointer_cast(d_send_left.data())
         );
         CUDA_CHECK(cudaGetLastError());
     }
 
     if (send_right_count > 0) {
-        launch_pack_halo_kernel(
+        pack_halo_kernel<<<blocks, threads>>>(
             d_local,
             n_local,
             thrust::raw_pointer_cast(flags_right.data()),
             thrust::raw_pointer_cast(pos_right.data()),
             send_right_count,
-            thrust::raw_pointer_cast(d_send_right.data()),
-            threads
+            thrust::raw_pointer_cast(d_send_right.data())
         );
         CUDA_CHECK(cudaGetLastError());
     }
@@ -563,6 +580,8 @@ void MDSimulation::update_halo() {
 
     cfg_manager.config.n_halo_left  = recv_left_count;
     cfg_manager.config.n_halo_right = recv_right_count;
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 void MDSimulation::update_d_particles() { // use only d_particles to update particles through particle exchange between ranks
@@ -631,6 +650,7 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
     if (threads <= 0) {
         threads = 256;
     }
+    const int blocks = (n_local + threads - 1) / threads;
 
     if (n_local > 0) {
         flags_left.resize(n_local);
@@ -639,16 +659,15 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
         pos_left.resize(n_local);
         pos_right.resize(n_local);
         pos_keep.resize(n_local);
-
-        launch_mark_migration_kernel(
+        
+        mark_migration_kernel<<<blocks, threads>>>(
             d_local,
             n_local,
             x_min,
             x_max,
             thrust::raw_pointer_cast(flags_left.data()),
             thrust::raw_pointer_cast(flags_right.data()),
-            thrust::raw_pointer_cast(flags_keep.data()),
-            threads
+            thrust::raw_pointer_cast(flags_keep.data())
         );
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -714,40 +733,37 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
         // d_keep.resize(keep_count);
 
         if (send_left_count > 0) {
-            launch_pack_selected_kernel(
+            pack_selected_kernel<<<blocks, threads>>>(
                 d_local,
                 n_local,
                 thrust::raw_pointer_cast(flags_left.data()),
                 thrust::raw_pointer_cast(pos_left.data()),
                 send_left_count,
-                thrust::raw_pointer_cast(d_send_left.data()),
-                threads
+                thrust::raw_pointer_cast(d_send_left.data())
             );
             CUDA_CHECK(cudaGetLastError());
         }
 
         if (send_right_count > 0) {
-            launch_pack_selected_kernel(
+            pack_selected_kernel<<<blocks, threads>>>(
                 d_local,
                 n_local,
                 thrust::raw_pointer_cast(flags_right.data()),
                 thrust::raw_pointer_cast(pos_right.data()),
                 send_right_count,
-                thrust::raw_pointer_cast(d_send_right.data()),
-                threads
+                thrust::raw_pointer_cast(d_send_right.data())
             );
             CUDA_CHECK(cudaGetLastError());
         }
 
         if (keep_count > 0) {
-            launch_pack_selected_kernel(
+            pack_selected_kernel<<<blocks, threads>>>(
                 d_local,
                 n_local,
                 thrust::raw_pointer_cast(flags_keep.data()),
                 thrust::raw_pointer_cast(pos_keep.data()),
                 keep_count,
-                thrust::raw_pointer_cast(d_keep.data()),
-                threads
+                thrust::raw_pointer_cast(d_keep.data())
             );
             CUDA_CHECK(cudaGetLastError());
         }
@@ -836,6 +852,8 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
 
     // Update local count
     cfg_manager.config.n_local = n_new_local;
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 void MDSimulation::init_particles(){
@@ -953,15 +971,214 @@ void MDSimulation::init_particles(){
         }
     }
 
-    // Finish this later, cal forces and broadcast to host.
-    // Then distribute and update halos.
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 void MDSimulation::plot_particles(const std::string& filename){
-    print_particles(h_particles,
+    if (cfg_manager.config.rank_idx == 0){
+        print_particles(h_particles,
                             filename,
                             cfg_manager.config.box_w_global,
                             cfg_manager.config.box_h_global,
                             cfg_manager.config.SIGMA_AA,
                             cfg_manager.config.SIGMA_BB);
+    }
 }
+
+// update forces and store into d_particles
+void MDSimulation::cal_forces(){
+    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    const int n_local = cfg_manager.config.n_local;
+    const int n_left = cfg_manager.config.n_halo_left;
+    const int n_right = cfg_manager.config.n_halo_right;
+    int blocks = (n_local + threads - 1)/threads;
+    li_force_kernel<<<blocks, threads>>>(thrust::raw_pointer_cast(d_particles.data()),
+                                thrust::raw_pointer_cast(d_particles_halo_left.data()),
+                                thrust::raw_pointer_cast(d_particles_halo_right.data()),
+                                n_local, n_left, n_right,
+                                cfg_manager.config.box_w_global, cfg_manager.config.box_h_global,
+                                cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_BB, cfg_manager.config.SIGMA_AB,
+                                cfg_manager.config.EPSILON_AA, cfg_manager.config.EPSILON_BB, cfg_manager.config.EPSILON_AB,
+                                cfg_manager.config.cutoff,
+                                cfg_manager.config.MASS_A, cfg_manager.config.MASS_B);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+
+void MDSimulation::step_single_NVE(){
+    const double dt = cfg_manager.config.dt;
+    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    int n_local = cfg_manager.config.n_local;
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+
+    int blocks = (n_local + threads - 1)/threads;
+    step_half_vv_kernel<<<blocks, threads>>>(thrust::raw_pointer_cast(d_particles.data()), n_local, dt, Lx, Ly);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    update_d_particles();//exchange particles
+    update_halo();//update halos
+
+    //After exchange, n_local may have changed; recompute blocks
+    n_local = cfg_manager.config.n_local;
+    blocks  = (n_local + threads - 1) / threads;
+    
+    cal_forces();
+    step_2nd_half_vv_kernel<<<blocks, threads>>>(thrust::raw_pointer_cast(d_particles.data()), n_local, dt);
+    // We don't care about vel and acc in halos, so no need to update that.
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+
+void MDSimulation::step_single_nose_hoover() {
+    const double dt      = cfg_manager.config.dt;
+    const int    threads = cfg_manager.config.THREADS_PER_BLOCK;
+    const double Lx      = cfg_manager.config.box_w_global;
+    const double Ly      = cfg_manager.config.box_h_global;
+
+    int n_local = cfg_manager.config.n_local;
+    int blocks  = (n_local + threads - 1) / threads;
+
+    double K_global = cal_total_K();
+
+    const double g_dof = 2*cfg_manager.config.n_particles_global - 2;
+    const double T0    = cfg_manager.config.T_target;
+    const double Q     = cfg_manager.config.Q;       // thermostat mass
+
+    xi += 0.5 * dt * (2.0 * K_global - g_dof * T0) / Q;
+
+    step_half_vv_nh_kernel<<<blocks, threads>>>(
+        thrust::raw_pointer_cast(d_particles.data()),
+        n_local, dt, xi, Lx, Ly
+    );
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    update_d_particles();
+    update_halo();
+
+    cal_forces();
+
+    n_local = cfg_manager.config.n_local;//n_local may have changed after migration
+    blocks  = (n_local + threads - 1) / threads;
+
+    K_global = cal_total_K();
+
+    xi += 0.5 * dt * (2.0 * K_global - g_dof * T0) / Q;
+
+    step_2nd_half_vv_nh_kernel<<<blocks, threads>>>(
+        thrust::raw_pointer_cast(d_particles.data()),
+        n_local, dt, xi
+    );
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+double MDSimulation::cal_total_K(){
+    double K_local  = compute_kinetic_energy_local();
+    double K_global = 0.0;
+    MPI_Allreduce(&K_local, &K_global, 1, MPI_DOUBLE, MPI_SUM, comm);
+    return K_global;
+}
+
+double MDSimulation::compute_kinetic_energy_local(){
+    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    const int n_local = cfg_manager.config.n_local;
+
+    if (n_local <= 0) {
+        return 0.0;
+    }
+
+    const int blocks = (n_local + threads - 1) / threads;
+
+    // temporary device buffer for per-block partial sums
+    thrust::device_vector<double> d_partial(blocks);
+
+    cal_local_K_kernel<<<blocks, threads, threads * static_cast<int>(sizeof(double))>>>(
+        thrust::raw_pointer_cast(d_particles.data()),
+        n_local,
+        cfg_manager.config.MASS_A,
+        cfg_manager.config.MASS_B,
+        thrust::raw_pointer_cast(d_partial.data())
+    );
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // copy partial sums back and accumulate on host
+    std::vector<double> h_partial(blocks);
+    CUDA_CHECK(cudaMemcpy(h_partial.data(),
+                          thrust::raw_pointer_cast(d_partial.data()),
+                          static_cast<size_t>(blocks) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+
+    double K_local = 0.0;
+    for (int i = 0; i < blocks; ++i) {
+        K_local += h_partial[i];
+    }
+    return K_local;
+}
+
+double MDSimulation::compute_U_energy_local() {
+    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    const int n_local = cfg_manager.config.n_local;
+    const int n_left  = cfg_manager.config.n_halo_left;
+    const int n_right = cfg_manager.config.n_halo_right;
+
+    if (n_local <= 0) {
+        return 0.0;
+    }
+
+    const int blocks = (n_local + threads - 1) / threads;
+
+    // per-block partial sums on device
+    thrust::device_vector<double> d_partial(blocks);
+
+    cal_local_U_kernel<<<blocks,
+                         threads,
+                         threads * static_cast<int>(sizeof(double))>>>(
+        thrust::raw_pointer_cast(d_particles.data()),
+        thrust::raw_pointer_cast(d_particles_halo_left.data()),
+        thrust::raw_pointer_cast(d_particles_halo_right.data()),
+        n_local,
+        n_left,
+        n_right,
+        cfg_manager.config.box_w_global,
+        cfg_manager.config.box_h_global,
+        cfg_manager.config.SIGMA_AA,
+        cfg_manager.config.SIGMA_BB,
+        cfg_manager.config.SIGMA_AB,
+        cfg_manager.config.EPSILON_AA,
+        cfg_manager.config.EPSILON_BB,
+        cfg_manager.config.EPSILON_AB,
+        cfg_manager.config.cutoff,
+        thrust::raw_pointer_cast(d_partial.data())
+    );
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // copy partial sums to host and accumulate
+    std::vector<double> h_partial(blocks);
+    CUDA_CHECK(cudaMemcpy(h_partial.data(),
+                          thrust::raw_pointer_cast(d_partial.data()),
+                          static_cast<size_t>(blocks) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+
+    double U_local = 0.0;
+    for (int i = 0; i < blocks; ++i) {
+        U_local += h_partial[i];
+    }
+
+    return U_local;
+}
+
+double MDSimulation::cal_total_U() {
+    const double U_local  = compute_U_energy_local();
+    double       U_global = 0.0;
+    MPI_Allreduce(&U_local, &U_global, 1, MPI_DOUBLE, MPI_SUM, comm);
+    return U_global;
+}
+

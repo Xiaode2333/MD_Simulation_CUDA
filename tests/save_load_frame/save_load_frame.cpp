@@ -1,6 +1,6 @@
 // g++ tests/save_load_frame/save_load_frame.cpp     src/md_common.cpp src/md_particle.cpp     -o tests/save_load_frame/save_load_frame     -I"${CONDA_PREFIX}/include"     -I"./include"     -L"${CONDA_PREFIX}/lib"     -Wl,-rpath,"${CONDA_PREFIX}/lib"     -lz -lfmt
-#include "../../include/md_common.hpp"
-#include "../../include/md_particle.hpp"
+#include "md_common.hpp"
+#include "md_particle.hpp"
 
 #include <vector>
 #include <fmt/core.h>

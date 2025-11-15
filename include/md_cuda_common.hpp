@@ -36,17 +36,6 @@ __global__ void mark_halo_kernel(const Particle* particles,
                                  int* flags_left,
                                  int* flags_right);
 
-void launch_mark_halo_kernel(const Particle* particles,
-                                 int n_local,
-                                 double x_min,
-                                 double x_max,
-                                 double Lx,
-                                 double halo_width,
-                                 int* flags_left,
-                                 int* flags_right,
-                                 int threads_per_block
-                                );
-
 //device kernel to pack selected halo particles using prefix-sum positions
 __global__ void pack_halo_kernel(const Particle* particles,
                                  int n_local,
@@ -55,14 +44,6 @@ __global__ void pack_halo_kernel(const Particle* particles,
                                  int max_count,
                                  Particle* out_buf);                              
 
-void launch_pack_halo_kernel(const Particle* particles,
-                                 int n_local,
-                                 const int* flags,
-                                 const int* pos,
-                                 int max_count,
-                                 Particle* out_buf,
-                                 int threads_per_block
-                                );    
 
 //mark particles in d_local with flags_left, flags_right, flags_keep
 __global__ void mark_migration_kernel(const Particle* particles,
@@ -80,20 +61,50 @@ __global__ void pack_selected_kernel(const Particle* particles,
                                      const int* pos,
                                      int n_selected,
                                      Particle* out);
-                                     
-void launch_mark_migration_kernel(const Particle* d_particles,
-                                                int n_local,
-                                                double x_min,
-                                                double x_max,
-                                                int* d_flags_left,
-                                                int* d_flags_right,
-                                                int* d_flags_keep,
-                                                int threads);                             
+                      
 
-void launch_pack_selected_kernel(const Particle* d_particles,
-                                               int n_local,
-                                               const int* d_flags,
-                                               const int* d_pos,
-                                               int n_selected,
-                                               Particle* d_out,
-                                               int threads);                                                
+                                            
+__global__ void li_force_kernel(Particle* particles, Particle* halo_left, Particle* halo_right,
+        int n_local, int n_left, int n_right,
+        double Lx, double Ly,
+        double sigma_AA, double sigma_BB, double sigma_AB, 
+        double epsilon_AA, double epsilon_BB, double epsilon_AB,
+        double cutoff,
+        double mass_0, double mass_1);        
+        
+// Verlocity-Verlot half kick
+//from r^{n}, v^{n}, a^{n} to r^{n+1}, v^{n+1/2}, a^{n};
+__global__ void step_half_vv_kernel(Particle* particles, int n_local, double dt, double Lx, double Ly);
+
+//2nd half kick. From r^{n+1}, v^{n+1/2}, a^{n+1} to r^{n+1}, v^{n+1}, a^{n+1};
+__global__ void step_2nd_half_vv_kernel(Particle* particles, int n_local, double dt);
+
+__global__ void step_half_vv_nh_kernel(Particle* particles,
+                                       int n_local,
+                                       double dt,
+                                       double xi,
+                                       double Lx,
+                                       double Ly);
+
+__global__ void step_2nd_half_vv_nh_kernel(Particle* particles,
+                                           int n_local,
+                                           double dt,
+                                           double xi);
+
+__global__ void cal_local_K_kernel(const Particle* __restrict__ particles,
+                                   int n_local,
+                                   double mass_A,
+                                   double mass_B,
+                                   double* __restrict__ partial_sums);
+
+
+
+__global__ void cal_local_U_kernel(const Particle* __restrict__ particles,
+                                   const Particle* __restrict__ halo_left,
+                                   const Particle* __restrict__ halo_right,
+                                   int n_local, int n_left, int n_right,
+                                   double Lx, double Ly,
+                                   double sigma_AA, double sigma_BB, double sigma_AB,
+                                   double epsilon_AA, double epsilon_BB, double epsilon_AB,
+                                   double cutoff,
+                                   double* __restrict__ partial_sums);
