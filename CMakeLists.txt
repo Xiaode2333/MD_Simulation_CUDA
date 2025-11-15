@@ -1,5 +1,3 @@
-# cmake -B build -S .  -DCMAKE_TOOLCHAIN_FILE=/home/bryson/vcpkg/scripts/buildsystems/vcpkg.cmake  -DVCPKG_TARGET_TRIPLET=x64-linux     -DPython3_EXECUTABLE=/usr/bin/python3
-
 cmake_minimum_required(VERSION 3.18)
 
 project(CUDA2_MD LANGUAGES C CXX CUDA)
@@ -10,15 +8,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-# ---- CUDA toolkit (for cuda_runtime.h etc.) ----
-# find_package(CUDAToolkit REQUIRED)
-find_package(MPI REQUIRED)
+# ---- core packages ----
+find_package(MPI REQUIRED COMPONENTS C CXX)
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 
+# MPI check
+if(DEFINED ENV{OMPI_CUDA_PREFIX})
+    set(OMPI_CUDA_INCLUDE "$ENV{OMPI_CUDA_PREFIX}/include")
+    message(STATUS "OMPI_CUDA_INCLUDE = ${OMPI_CUDA_INCLUDE}")
+    include_directories(SYSTEM "${OMPI_CUDA_INCLUDE}")
+else()
+    message(WARNING "OMPI_CUDA_PREFIX is not set; CUDA-aware MPI headers will not be added explicitly.")
+endif()
 
+# ---- NumPy / matplotlib checks ----
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "-c" "import numpy, sys; sys.stdout.write(numpy.get_include())"
     OUTPUT_VARIABLE PYTHON_NUMPY_INCLUDE_DIR
@@ -36,9 +42,6 @@ if(NOT MATPLOTLIB_IMPORT_RESULT EQUAL 0)
     message(FATAL_ERROR "Python3 matplotlib module not found for interpreter: ${Python3_EXECUTABLE}")
 endif()
 
-# ---- nlohmann-json via vcpkg ----
-
-
 # ---- project directories ----
 set(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(INCLUDE_DIR "${PROJECT_ROOT}/include")
@@ -47,25 +50,58 @@ set(SRC_DIR     "${PROJECT_ROOT}/src")
 set(TESTS_DIR   "${PROJECT_ROOT}/tests")
 set(MATPLOTLIB_CPP_DIR "${PROJECT_ROOT}/external/matplotlib-cpp")
 
-# ---- core sources ----
+# ---- sources ----
 file(GLOB_RECURSE PROJECT_HEADERS "${INCLUDE_DIR}/*.hpp")
 file(GLOB_RECURSE PROJECT_SOURCES "${SRC_DIR}/*.cpp")
 file(GLOB_RECURSE PROJECT_CUDA    "${CUDA_DIR}/*.cu")
 
 add_library(md_particle_lib
-    # ${PROJECT_HEADERS}
     ${PROJECT_SOURCES}
     ${PROJECT_CUDA}
 )
 
 set_source_files_properties(
-    # ${PROJECT_HEADERS}
-    # ${PROJECT_SOURCES}
     ${PROJECT_CUDA}
     PROPERTIES
         LANGUAGE CUDA
 )
 
+# ---- robust MPI include detection ----
+set(MPI_ALL_INCLUDES "")
+
+# 1) From imported target MPI::MPI_CXX (most reliable)
+if(TARGET MPI::MPI_CXX)
+    get_target_property(_mpi_cxx_inc MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES)
+    if(_mpi_cxx_inc)
+        list(APPEND MPI_ALL_INCLUDES ${_mpi_cxx_inc})
+    endif()
+endif()
+
+# 2) From classic variables (if CMake set them)
+if(MPI_CXX_INCLUDE_DIRS)
+    list(APPEND MPI_ALL_INCLUDES ${MPI_CXX_INCLUDE_DIRS})
+endif()
+if(MPI_C_INCLUDE_PATH)
+    list(APPEND MPI_ALL_INCLUDES ${MPI_C_INCLUDE_PATH})
+endif()
+if(MPI_INCLUDE_PATH)
+    list(APPEND MPI_ALL_INCLUDES ${MPI_INCLUDE_PATH})
+endif()
+
+list(REMOVE_DUPLICATES MPI_ALL_INCLUDES)
+
+message(STATUS "MPI_ALL_INCLUDES = ${MPI_ALL_INCLUDES}")
+
+# If still empty, you *can* hard-code as a last resort on this machine:
+# list(APPEND MPI_ALL_INCLUDES "/usr/lib/x86_64-linux-gnu/openmpi/include"
+#                              "/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi")
+
+# Apply globally so nvcc also sees them
+if(MPI_ALL_INCLUDES)
+    include_directories(SYSTEM ${MPI_ALL_INCLUDES})
+endif()
+
+# ---- includes / links for md_particle_lib ----
 target_include_directories(md_particle_lib
     PUBLIC
         "${PROJECT_ROOT}"
@@ -73,25 +109,19 @@ target_include_directories(md_particle_lib
         "${MATPLOTLIB_CPP_DIR}"
         ${Python3_INCLUDE_DIRS}
         ${PYTHON_NUMPY_INCLUDE_DIR}
-        # ${CUDAToolkit_INCLUDE_DIRS}
+        ${OMPI_CUDA_INCLUDE}
 )
 
 target_link_libraries(md_particle_lib
     PUBLIC
         fmt::fmt
         Python3::Python
-        # Python3::NumPy
         nlohmann_json::nlohmann_json
-        # CUDA::cudart
         MPI::MPI_CXX
         ZLIB::ZLIB
 )
-# target_compile_definitions(md_particle_lib
-#     PUBLIC
-#         FMT_HEADER_ONLY
-# )
 
-# ---- test executables: tests/*/*.cpp ----
+# ---- tests ----
 file(GLOB_RECURSE TEST_SOURCES "${TESTS_DIR}/*/*.cpp")
 
 foreach(test_src IN LISTS TEST_SOURCES)
@@ -106,6 +136,7 @@ foreach(test_src IN LISTS TEST_SOURCES)
     target_link_libraries("${exe_name}"
         PRIVATE
             md_particle_lib
+            MPI::MPI_CXX
     )
 
     target_include_directories("${exe_name}"
@@ -114,9 +145,7 @@ foreach(test_src IN LISTS TEST_SOURCES)
             "${INCLUDE_DIR}"
             "${MATPLOTLIB_CPP_DIR}"
             ${Python3_INCLUDE_DIRS}
-            ${Python3_NumPy_INCLUDE_DIRS}
-            ${CUDAToolkit_INCLUDE_DIRS}
+            ${PYTHON_NUMPY_INCLUDE_DIR}
+            ${MPI_ALL_INCLUDES}
     )
 endforeach()
-
-# End of Add

@@ -27,3 +27,6 @@ __pycache__/
 .mypy_cache/
 /.vscode/
 /vcpkg_installed/
+*.png
+*.svg
+*.pdf

@@ -9,35 +9,136 @@ MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm){
     this->comm = comm;
     xi = 0.0;
 
-    fmt::print("Starting broadcasting params.\n");
+    // fmt::print("Starting broadcasting params.\n");
     broadcast_params();
-    fmt::print("Params broadcasted.\n");
+    // fmt::print("Params broadcasted.\n");
 
     allocate_memory();
-    fmt::print("Memory allocated.\n");
+    fmt::print("[Rank] {}/{}. Memory allocated.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
 
     init_particles();//only in rank 0 host h_particles
 
     //Distribute from host of rank 0 to other ranks' devices
+    fmt::print("[Rank] {}/{}. Distributing partilces.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
     distribute_particles_h2d(); 
+    fmt::print("[Rank] {}/{}. Update_halo.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
     update_halo();
 
     //Update forces for all ranks, and then collect to host on rank 0
+    fmt::print("[Rank] {}/{}. Updating forces.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
     cal_forces();
     update_halo();//copy forces to halos
+    fmt::print("[Rank] {}/{}. Collecting particles.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
     collect_particles_d2h();
 
-    fmt::print("MD simulation env initialized.\n");
+    fmt::print("[Rank] {}/{}. MD simulation env initialized.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
 }
 
 MDSimulation::~MDSimulation() = default;
 
 void MDSimulation::broadcast_params() {
-    MPI_Bcast(&cfg_manager, static_cast<int>(sizeof(MDConfigManager)), MPI_BYTE, 0, comm);
+    int world_rank = 0;
+    int world_size = 0;
+    MPI_Comm_rank(comm, &world_rank);
+    MPI_Comm_size(comm, &world_size);
+
+    // rank 0 sanity and global-derived defaults
+    if (world_rank == 0) {
+        // Check consistency of rank_size from config (if provided)
+        if (cfg_manager.config.rank_size != 0 &&
+            cfg_manager.config.rank_size != world_size) {
+            fmt::print(stderr,
+                       "[broadcast_params] config.rank_size={} != world_size={}.\n",
+                       cfg_manager.config.rank_size, world_size);
+            MPI_Abort(comm, 1);
+        }
+        cfg_manager.config.rank_size = world_size;
+
+        // Basic sanity for global box and particle count
+        if (cfg_manager.config.box_w_global <= 0.0) {
+            fmt::print(stderr,
+                       "[broadcast_params] box_w_global must be > 0, got {}.\n",
+                       cfg_manager.config.box_w_global);
+            MPI_Abort(comm, 1);
+        }
+        if (cfg_manager.config.n_particles_global <= 0) {
+            fmt::print(stderr,
+                       "[broadcast_params] n_particles_global must be > 0, got {}.\n",
+                       cfg_manager.config.n_particles_global);
+            MPI_Abort(comm, 1);
+        }
+
+        // If capacity not specified, choose a reasonable default per rank
+        if (cfg_manager.config.n_cap <= 0) {
+            const double mean_per_rank =
+                static_cast<double>(cfg_manager.config.n_particles_global) /
+                static_cast<double>(world_size);
+            const int n_cap_default =
+                static_cast<int>(mean_per_rank * 1.5) + 128;
+            cfg_manager.config.n_cap = n_cap_default;
+        }
+
+        // If halo capacities not specified, set to a fraction of n_cap with a floor
+        if (cfg_manager.config.halo_left_cap <= 0) {
+            int cap = cfg_manager.config.n_cap / 4;
+            if (cap < 128) {
+                cap = 128;
+            }
+            cfg_manager.config.halo_left_cap = cap;
+        }
+        if (cfg_manager.config.halo_right_cap <= 0) {
+            int cap = cfg_manager.config.n_cap / 4;
+            if (cap < 128) {
+                cap = 128;
+            }
+            cfg_manager.config.halo_right_cap = cap;
+        }
+
+        // x_min, x_max, left_rank, right_rank are per-rank values
+        // they will be recomputed consistently on all ranks below,
+        // so the file values (if any) are ignored.
+    }
+
+    // broadcast the whole config struct from rank 0
+    MPI_Bcast(&cfg_manager.config,
+              static_cast<int>(sizeof(MDConfig)),
+              MPI_BYTE,
+              0,
+              comm);
+
+    // after broadcast, fix all rank-dependent fields locally
+    cfg_manager.config.rank_idx  = world_rank;
+    cfg_manager.config.rank_size = world_size;
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double dx = Lx / static_cast<double>(world_size);
+
+    cfg_manager.config.x_min = dx * static_cast<double>(world_rank);
+    cfg_manager.config.x_max = dx * static_cast<double>(world_rank + 1);
+
+    cfg_manager.config.left_rank  =
+        (world_rank + world_size - 1) % world_size;
+    cfg_manager.config.right_rank =
+        (world_rank + 1) % world_size;
+
+    // Optional: debug print
+    fmt::print("[broadcast_params] [Rank] {}/{}: x_min={:4.2f}, x_max={:4.2f}, left_rank={:1d}, right_rank={:1d}, n_cap={:4d}, haloL={:4d}, haloR={:4d}\n",
+               world_rank,
+               world_size,
+               cfg_manager.config.x_min,
+               cfg_manager.config.x_max,
+               cfg_manager.config.left_rank,
+               cfg_manager.config.right_rank,
+               cfg_manager.config.n_cap,
+               cfg_manager.config.halo_left_cap,
+               cfg_manager.config.halo_right_cap);
 }
 
 void MDSimulation::allocate_memory(){
     h_particles.resize(cfg_manager.config.n_particles_global);
+    h_particles_local.resize(cfg_manager.config.n_cap);
+    h_particles_halo_left.resize(cfg_manager.config.halo_left_cap);
+    h_particles_halo_right.resize(cfg_manager.config.halo_right_cap);
     d_particles.resize(cfg_manager.config.n_cap);
     d_particles_halo_left.resize(cfg_manager.config.halo_left_cap);
     d_particles_halo_right.resize(cfg_manager.config.halo_right_cap);
@@ -51,6 +152,8 @@ void MDSimulation::allocate_memory(){
     pos_left.reserve(cfg_manager.config.n_cap);
     pos_right.reserve(cfg_manager.config.n_cap);
     pos_keep.reserve(cfg_manager.config.n_cap);
+    h_send_left.reserve(cfg_manager.config.n_cap);
+    h_send_right.reserve(cfg_manager.config.n_cap);
 }
 
 
@@ -173,46 +276,53 @@ void MDSimulation::distribute_particles_h2d() {
 
         cfg_manager.config.n_local = local_count;
 
-        if (local_count > 0) { //directly receive to device memory
-            if (static_cast<int>(d_particles.size()) < local_count) {
-                fmt::print(stderr,
-                           "[distribute_particles_h2d] rank {} d_particles size={} < n_local={}.\n",
-                           rank_idx, d_particles.size(), local_count);
-                MPI_Abort(comm, 1);
-            }
-
-            Particle* d_ptr = thrust::raw_pointer_cast(d_particles.data());
-
-            // NOTE: requires CUDA-aware MPI: d_ptr is a device pointer.
-            MPI_Recv(d_ptr,
-                     local_count * static_cast<int>(sizeof(Particle)),
-                     MPI_BYTE,
-                     0,
-                     101,
-                     comm,
-                     MPI_STATUS_IGNORE);
-        }
-
-        // // If cann't use MPI-aware GPU, use this host buffer.
-        // h_particles.resize(N_global);
-        // if (local_count > 0) {
-            
-        //     MPI_Recv(h_particles.data(),
-        //              local_count * static_cast<int>(sizeof(Particle)),
-        //              MPI_BYTE,
-        //              0,
-        //              101,
-        //              comm,
-        //              MPI_STATUS_IGNORE);
-
+        // if (local_count > 0) { //directly receive to device memory
         //     if (static_cast<int>(d_particles.size()) < local_count) {
         //         fmt::print(stderr,
         //                    "[distribute_particles_h2d] rank {} d_particles size={} < n_local={}.\n",
         //                    rank_idx, d_particles.size(), local_count);
         //         MPI_Abort(comm, 1);
         //     }
-        //     thrust::copy_n(h_particles.begin(), local_count, d_particles.begin());
+
+        //     Particle* d_ptr = thrust::raw_pointer_cast(d_particles.data());
+
+        //     // NOTE: requires CUDA-aware MPI: d_ptr is a device pointer.
+        //     MPI_Recv(d_ptr,
+        //              local_count * static_cast<int>(sizeof(Particle)),
+        //              MPI_BYTE,
+        //              0,
+        //              101,
+        //              comm,
+        //              MPI_STATUS_IGNORE);
         // }
+
+        // // If cann't use MPI-aware GPU, use this host buffer.
+        // h_particles_local.resize(N_global);
+        if (local_count > 0) {
+
+            if (static_cast<int>(h_particles_local.size()) < local_count) {
+                fmt::print(stderr,
+                           "[distribute_particles_h2d] rank {} h_particles_local size={} < local_count={}.\n",
+                           rank_idx, h_particles_local.size(), local_count);
+                MPI_Abort(comm, 1);
+            }
+
+            MPI_Recv(h_particles_local.data(),
+                     local_count * static_cast<int>(sizeof(Particle)),
+                     MPI_BYTE,
+                     0,
+                     101,
+                     comm,
+                     MPI_STATUS_IGNORE);
+
+            if (static_cast<int>(d_particles.size()) < local_count) {
+                fmt::print(stderr,
+                           "[distribute_particles_h2d] rank {} d_particles size={} < n_local={}.\n",
+                           rank_idx, d_particles.size(), local_count);
+                MPI_Abort(comm, 1);
+            }
+            thrust::copy_n(h_particles_local.begin(), local_count, d_particles.begin());
+        }
     }
 
     // Build halos on device and exchange them by MPI (device to device)
@@ -222,7 +332,7 @@ void MDSimulation::distribute_particles_h2d() {
 }
 
 // collect particles from device to host (rank 0 gathers all)
-void MDSimulation::collect_particles_d2h() { // collect particles from device to host, only to host of rank 0
+void MDSimulation::collect_particles_d2h() {
     const int rank_idx  = cfg_manager.config.rank_idx;
     const int rank_size = cfg_manager.config.rank_size;
 
@@ -247,93 +357,91 @@ void MDSimulation::collect_particles_d2h() { // collect particles from device to
     const int N_global = cfg_manager.config.n_particles_global;
     const int n_local  = cfg_manager.config.n_local;
 
-    // // Copy local device data to a temporary host buffer
-    // std::vector<Particle> h_local;
-    // if (n_local > 0) {
-    //     h_local.resize(static_cast<std::size_t>(n_local));
-
-    //     Particle* d_ptr = thrust::raw_pointer_cast(d_particles.data());
-    //     CUDA_CHECK(cudaDeviceSynchronize());
-    //     CUDA_CHECK(cudaMemcpy(h_local.data(),
-    //                           d_ptr,
-    //                           static_cast<std::size_t>(n_local) * sizeof(Particle),
-    //                           cudaMemcpyDeviceToHost));
-    // }
-
-    // Gather per-rank particle counts (in units of "Particle") on rank 0
-    std::vector<int> counts;
+    // ensure h_particles_local has at least 1 element so .data() is always valid
+    {
+        const int min_host_local = (n_local > 0) ? n_local : 1;
+        if (static_cast<int>(h_particles_local.size()) < min_host_local) {
+            h_particles_local.resize(static_cast<std::size_t>(min_host_local));
+        }
+    }
+    // stage local device data into host buffer h_particles_local
+    if (n_local > 0) {
+        Particle* d_ptr = thrust::raw_pointer_cast(d_particles.data());
+        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaMemcpy(
+            h_particles_local.data(),
+            d_ptr,
+            static_cast<std::size_t>(n_local) * sizeof(Particle),
+            cudaMemcpyDeviceToHost
+        ));
+    }
+    // use Allgather so every rank knows all n_local values
+    std::vector<int> counts_particles(rank_size);
     int n_local_int = n_local;
 
-    if (world_rank == 0) {
-        counts.resize(rank_size);
+    MPI_Allgather(&n_local_int,
+                  1,
+                  MPI_INT,
+                  counts_particles.data(),
+                  1,
+                  MPI_INT,
+                  comm);
+    // build recvcounts/displs in units of bytes on all ranks
+    std::vector<int> recvcounts_bytes(rank_size);
+    std::vector<int> displs_bytes(rank_size);
+
+    int offset_particles = 0;
+    for (int r = 0; r < rank_size; ++r) {
+        recvcounts_bytes[r] = counts_particles[r] * static_cast<int>(sizeof(Particle));
+        displs_bytes[r]     = offset_particles * static_cast<int>(sizeof(Particle));
+        offset_particles   += counts_particles[r];
     }
-
-    MPI_Gather(&n_local_int,
-               1,
-               MPI_INT,
-               world_rank == 0 ? counts.data() : nullptr,
-               1,
-               MPI_INT,
-               0,
-               comm);
-
-    // On rank 0, prepare recv counts / displacements (in bytes) and check total
-    std::vector<int> recvcounts_bytes;
-    std::vector<int> displs_bytes;
-
-    if (world_rank == 0) {
-        recvcounts_bytes.resize(rank_size);
-        displs_bytes.resize(rank_size);
-
-        int offset_particles = 0;
-        for (int r = 0; r < rank_size; ++r) {
-            recvcounts_bytes[r] = counts[r] * static_cast<int>(sizeof(Particle));
-            displs_bytes[r]     = offset_particles * static_cast<int>(sizeof(Particle));
-            offset_particles   += counts[r];
-        }
-
-        const int total_particles = offset_particles;
-        if (total_particles != N_global * static_cast<int>(sizeof(Particle))) {
+    const int total_particles = offset_particles;
+    if (total_particles != N_global) {
+        if (world_rank == 0) {
             fmt::print(stderr,
-                       "[collect_particles_d2h] sum of n_local across ranks ({} Particles) "
+                       "[collect_particles_d2h] sum of n_local across ranks ({}) "
                        "!= n_particles_global={}.\n",
-                       total_particles / static_cast<int>(sizeof(Particle)),
-                       N_global);
-            MPI_Abort(comm, 1);
+                       total_particles, N_global);
         }
+        MPI_Abort(comm, 1);
+    }
 
-        if (static_cast<int>(h_particles.size()) < N_global) {
-            h_particles.resize(static_cast<std::size_t>(N_global));
+    // ensure global host buffer exists and has at least 1 element
+    {
+        const int min_global = (N_global > 0) ? N_global : 1;
+        if (static_cast<int>(h_particles.size()) < min_global) {
+            h_particles.resize(static_cast<std::size_t>(min_global));
         }
     }
 
-    // Gather actual particle data from all ranks to rank 0
+    // Gather actual particle data from all ranks to rank 0 (host-only buffers)
     const int send_bytes = n_local_int * static_cast<int>(sizeof(Particle));
-    void* sendbuf = (n_local_int > 0) ? thrust::raw_pointer_cast(d_particles.data()) : nullptr;
+
+    // always use a valid send buffer (even if send_bytes == 0)
+    void* sendbuf = static_cast<void*>(h_particles_local.data());
 
     void* recvbuf = nullptr;
-    int*  recvcounts_ptr = nullptr;
-    int*  displs_ptr     = nullptr;
-
     if (world_rank == 0) {
-        recvbuf        = static_cast<void*>(h_particles.data());
-        recvcounts_ptr = recvcounts_bytes.data();
-        displs_ptr     = displs_bytes.data();
+        recvbuf = static_cast<void*>(h_particles.data());
+    } else {
+        // not used on non-root, but must be non-null
+        recvbuf = static_cast<void*>(h_particles_local.data());
     }
-
     MPI_Gatherv(sendbuf,
                 send_bytes,
                 MPI_BYTE,
                 recvbuf,
-                recvcounts_ptr,
-                displs_ptr,
+                recvcounts_bytes.data(),
+                displs_bytes.data(),
                 MPI_BYTE,
                 0,
-                comm);
+                comm);        
 }
 
 
-// suppose d_particles is already updated
+
+// suppose d_particles is already update 
 void MDSimulation::update_halo() {
     const int rank_idx  = cfg_manager.config.rank_idx;
     const int rank_size = cfg_manager.config.rank_size;
@@ -366,13 +474,13 @@ void MDSimulation::update_halo() {
         right_rank = (rank_idx + 1) % rank_size;
     }
 
-    const int    n_local      = cfg_manager.config.n_local;
-    const int    n_cap        = cfg_manager.config.n_cap;
+    const int    n_local        = cfg_manager.config.n_local;
+    const int    n_cap          = cfg_manager.config.n_cap;
     const int    halo_left_cap  = cfg_manager.config.halo_left_cap;
     const int    halo_right_cap = cfg_manager.config.halo_right_cap;
-    const double Lx           = cfg_manager.config.box_w_global;
-    const double x_min        = cfg_manager.config.x_min;
-    const double x_max        = cfg_manager.config.x_max;
+    const double Lx             = cfg_manager.config.box_w_global;
+    const double x_min          = cfg_manager.config.x_min;
+    const double x_max          = cfg_manager.config.x_max;
 
     if (n_local > n_cap) {
         fmt::print(stderr,
@@ -381,56 +489,49 @@ void MDSimulation::update_halo() {
         MPI_Abort(comm, 1);
     }
 
-    if (n_local == 0) {
-        // Nothing to do
-        return;
-    }
-
     const double sigma_max = std::max(
         cfg_manager.config.SIGMA_AA,
         std::max(cfg_manager.config.SIGMA_BB, cfg_manager.config.SIGMA_AB)
     );
-    const double halo_width = cfg_manager.config.cutoff * sigma_max * 1.1; // 1.1 safety factor
+    const double halo_width = cfg_manager.config.cutoff * sigma_max * 1.2; // 1.2 safety factor
 
-    Particle* d_local = thrust::raw_pointer_cast(d_particles.data());
+    Particle* d_local = (n_local > 0)
+                        ? thrust::raw_pointer_cast(d_particles.data())
+                        : nullptr;
 
-    // thrust::device_vector<int> flags_left(n_local);
-    // thrust::device_vector<int> flags_right(n_local);
-    // thrust::device_vector<int> pos_left(n_local);
-    // thrust::device_vector<int> pos_right(n_local);
-    flags_left.resize(n_local);
-    flags_right.resize(n_local);
-    pos_left.resize(n_local);
-    pos_right.resize(n_local);
+    int send_left_count  = 0;
+    int send_right_count = 0;
 
     int threads = cfg_manager.config.THREADS_PER_BLOCK;
     if (threads <= 0) {
         threads = 256;
     }
-    int blocks = (n_local + threads - 1)/threads;
-    mark_halo_kernel<<<blocks, threads>>>(d_local,
-                            n_local,
-                            x_min,
-                            x_max,
-                            Lx,
-                            halo_width,
-                            thrust::raw_pointer_cast(flags_left.data()),
-                            thrust::raw_pointer_cast(flags_right.data()));
+    int blocks = (n_local + threads - 1) / threads;
 
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    if (n_local > 0){
+        // Resize persistent device buffers
+        flags_left.resize(n_local);
+        flags_right.resize(n_local);
+        pos_left.resize(n_local);
+        pos_right.resize(n_local);
 
-    // Prefix sums to get compact indices
-    thrust::exclusive_scan(flags_left.begin(), flags_left.end(),
-                           pos_left.begin());
-    thrust::exclusive_scan(flags_right.begin(), flags_right.end(),
-                           pos_right.begin());
+        mark_halo_kernel<<<blocks, threads>>>(
+            d_local,
+            n_local,
+            x_min,
+            x_max,
+            Lx,
+            halo_width,
+            thrust::raw_pointer_cast(flags_left.data()),
+            thrust::raw_pointer_cast(flags_right.data())
+        );
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
 
-    int send_left_count  = 0;
-    int send_right_count = 0;
+        // Prefix sums to get compact indices
+        thrust::exclusive_scan(flags_left.begin(),  flags_left.end(),  pos_left.begin());
+        thrust::exclusive_scan(flags_right.begin(), flags_right.end(), pos_right.begin());
 
-    // Compute counts from last flag and last position (device to host for two ints)
-    if (n_local > 0) {
         const int last = n_local - 1;
 
         int last_flag_left_host   = 0;
@@ -439,21 +540,21 @@ void MDSimulation::update_halo() {
         int last_pos_right_host   = 0;
 
         CUDA_CHECK(cudaMemcpy(&last_flag_left_host,
-                            thrust::raw_pointer_cast(flags_left.data()) + last,
-                            sizeof(int),
-                            cudaMemcpyDeviceToHost));
+                              thrust::raw_pointer_cast(flags_left.data()) + last,
+                              sizeof(int),
+                              cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(&last_pos_left_host,
-                            thrust::raw_pointer_cast(pos_left.data()) + last,
-                            sizeof(int),
-                            cudaMemcpyDeviceToHost));
+                              thrust::raw_pointer_cast(pos_left.data()) + last,
+                              sizeof(int),
+                              cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(&last_flag_right_host,
-                            thrust::raw_pointer_cast(flags_right.data()) + last,
-                            sizeof(int),
-                            cudaMemcpyDeviceToHost));
+                              thrust::raw_pointer_cast(flags_right.data()) + last,
+                              sizeof(int),
+                              cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(&last_pos_right_host,
-                            thrust::raw_pointer_cast(pos_right.data()) + last,
-                            sizeof(int),
-                            cudaMemcpyDeviceToHost));
+                              thrust::raw_pointer_cast(pos_right.data()) + last,
+                              sizeof(int),
+                              cudaMemcpyDeviceToHost));
 
         send_left_count  = last_pos_left_host  + last_flag_left_host;
         send_right_count = last_pos_right_host + last_flag_right_host;
@@ -475,12 +576,7 @@ void MDSimulation::update_halo() {
         MPI_Abort(comm, 1);
     }
 
-    // Temporary send buffers on device
-    // thrust::device_vector<Particle> d_send_left(send_left_count);
-    // thrust::device_vector<Particle> d_send_right(send_right_count);
-
-    int blocks = (n_local + threads - 1) / threads;
-
+    // Pack halos on device into d_send_left / d_send_right (persistent device buffers)
     if (send_left_count > 0) {
         pack_halo_kernel<<<blocks, threads>>>(
             d_local,
@@ -507,14 +603,41 @@ void MDSimulation::update_halo() {
 
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    //stage send halos to host buffers
+    // std::vector<Particle> h_send_left;
+    // std::vector<Particle> h_send_right;
+    h_send_left.resize(send_left_count);
+    h_send_right.resize(send_right_count);
+
+    if (send_left_count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            h_send_left.data(),
+            thrust::raw_pointer_cast(d_send_left.data()),
+            static_cast<size_t>(send_left_count) * sizeof(Particle),
+            cudaMemcpyDeviceToHost
+        ));
+    }
+
+    if (send_right_count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            h_send_right.data(),
+            thrust::raw_pointer_cast(d_send_right.data()),
+            static_cast<size_t>(send_right_count) * sizeof(Particle),
+            cudaMemcpyDeviceToHost
+        ));
+    }
+
+    // h_particles_halo_left.resize(halo_left_cap);
+    // h_particles_halo_right.resize(halo_right_cap);
+
     // Exchange counts with neighbors
     int recv_left_count  = 0;
     int recv_right_count = 0;
     MPI_Status status;
 
     // Counts: send left, receive from right (right neighbor's left halo)
-    MPI_Sendrecv(&send_left_count, 1, MPI_INT,
-                 left_rank, 0,
+    MPI_Sendrecv(&send_left_count,  1, MPI_INT,
+                 left_rank,  0,
                  &recv_right_count, 1, MPI_INT,
                  right_rank, 0,
                  comm, &status);
@@ -523,7 +646,7 @@ void MDSimulation::update_halo() {
     MPI_Sendrecv(&send_right_count, 1, MPI_INT,
                  right_rank, 1,
                  &recv_left_count, 1, MPI_INT,
-                 left_rank, 1,
+                 left_rank,  1,
                  comm, &status);
 
     if (recv_left_count > halo_left_cap) {
@@ -539,50 +662,72 @@ void MDSimulation::update_halo() {
         MPI_Abort(comm, 1);
     }
 
-    Particle* d_recv_left  = (recv_left_count  > 0)
-                             ? thrust::raw_pointer_cast(d_particles_halo_left.data())
+    // host-side MPI exchange (no device pointers in MPI)
+    Particle* h_recv_left  = (recv_left_count  > 0)
+                             ? h_particles_halo_left.data()
                              : nullptr;
-    Particle* d_recv_right = (recv_right_count > 0)
-                             ? thrust::raw_pointer_cast(d_particles_halo_right.data())
+    Particle* h_recv_right = (recv_right_count > 0)
+                             ? h_particles_halo_right.data()
                              : nullptr;
 
-    Particle* d_send_left_ptr  = (send_left_count  > 0)
-                                 ? thrust::raw_pointer_cast(d_send_left.data())
+    Particle* h_send_left_ptr  = (send_left_count  > 0)
+                                 ? h_send_left.data()
                                  : nullptr;
-    Particle* d_send_right_ptr = (send_right_count > 0)
-                                 ? thrust::raw_pointer_cast(d_send_right.data())
+    Particle* h_send_right_ptr = (send_right_count > 0)
+                                 ? h_send_right.data()
                                  : nullptr;
 
-    // Device-to-device particle exchange (CUDA-aware MPI)
+    // Left halo (we send to left, receive from right)
     MPI_Sendrecv(
-        d_send_left_ptr,
+        h_send_left_ptr,
         send_left_count * static_cast<int>(sizeof(Particle)),
         MPI_BYTE,
         left_rank, 2,
-        d_recv_right,
+        h_recv_right,
         recv_right_count * static_cast<int>(sizeof(Particle)),
         MPI_BYTE,
         right_rank, 2,
         comm, &status
     );
 
+    // Right halo (we send to right, receive from left)
     MPI_Sendrecv(
-        d_send_right_ptr,
+        h_send_right_ptr,
         send_right_count * static_cast<int>(sizeof(Particle)),
         MPI_BYTE,
         right_rank, 3,
-        d_recv_left,
+        h_recv_left,
         recv_left_count * static_cast<int>(sizeof(Particle)),
         MPI_BYTE,
         left_rank, 3,
         comm, &status
     );
 
+    // Copy received halos back to device halo arrays
+    if (recv_left_count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            thrust::raw_pointer_cast(d_particles_halo_left.data()),
+            h_particles_halo_left.data(),
+            static_cast<size_t>(recv_left_count) * sizeof(Particle),
+            cudaMemcpyHostToDevice
+        ));
+    }
+    if (recv_right_count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            thrust::raw_pointer_cast(d_particles_halo_right.data()),
+            h_particles_halo_right.data(),
+            static_cast<size_t>(recv_right_count) * sizeof(Particle),
+            cudaMemcpyHostToDevice
+        ));
+    }
+
     cfg_manager.config.n_halo_left  = recv_left_count;
     cfg_manager.config.n_halo_right = recv_right_count;
+
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 }
+
 
 void MDSimulation::update_d_particles() { // use only d_particles to update particles through particle exchange between ranks
     const int rank_idx  = cfg_manager.config.rank_idx;
@@ -808,9 +953,9 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
         MPI_Abort(comm, 1);
     }
 
-    // Device pointers for send/recv (CUDA-aware MPI)
     d_local = thrust::raw_pointer_cast(d_particles.data());
 
+    // Device destinations for received particles
     Particle* d_recv_left  = (recv_left_count  > 0)
                              ? (d_local + keep_count)
                              : nullptr;
@@ -818,20 +963,41 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
                              ? (d_local + keep_count + recv_left_count)
                              : nullptr;
 
-    Particle* d_send_left_ptr  = (send_left_count  > 0)
-                                 ? thrust::raw_pointer_cast(d_send_left.data())
-                                 : nullptr;
-    Particle* d_send_right_ptr = (send_right_count > 0)
-                                 ? thrust::raw_pointer_cast(d_send_right.data())
-                                 : nullptr;
+    // Copy send buffers from device to host
+    if (send_left_count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            h_send_left.data(),
+            thrust::raw_pointer_cast(d_send_left.data()),
+            static_cast<size_t>(send_left_count) * sizeof(Particle),
+            cudaMemcpyDeviceToHost
+        ));
+    }
+    if (send_right_count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            h_send_right.data(),
+            thrust::raw_pointer_cast(d_send_right.data()),
+            static_cast<size_t>(send_right_count) * sizeof(Particle),
+            cudaMemcpyDeviceToHost
+        ));
+    }
 
-    // Exchange particle data (device-to-device)
+    // Host receive locations inside h_particles_local
+    Particle* h_recv_left  = h_particles_local.data() + keep_count;
+    Particle* h_recv_right = h_particles_local.data() + keep_count + recv_left_count;
+
+    // Host send pointers (any valid pointer is fine when count==0)
+    Particle* h_send_left_ptr  = (send_left_count  > 0) ? h_send_left.data()
+                                                        : h_particles_local.data();
+    Particle* h_send_right_ptr = (send_right_count > 0) ? h_send_right.data()
+                                                        : h_particles_local.data();
+
+    // Exchange particle data on host
     MPI_Sendrecv(
-        d_send_left_ptr,
+        h_send_left_ptr,
         send_left_count * static_cast<int>(sizeof(Particle)),
         MPI_BYTE,
         left_rank, 20,
-        d_recv_right,
+        h_recv_right,
         recv_right_count * static_cast<int>(sizeof(Particle)),
         MPI_BYTE,
         right_rank, 20,
@@ -839,16 +1005,34 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
     );
 
     MPI_Sendrecv(
-        d_send_right_ptr,
+        h_send_right_ptr,
         send_right_count * static_cast<int>(sizeof(Particle)),
         MPI_BYTE,
         right_rank, 21,
-        d_recv_left,
+        h_recv_left,
         recv_left_count * static_cast<int>(sizeof(Particle)),
         MPI_BYTE,
         left_rank, 21,
         comm, &status
     );
+
+    // Copy received particles back to device
+    if (recv_left_count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            d_recv_left,
+            h_recv_left,
+            static_cast<size_t>(recv_left_count) * sizeof(Particle),
+            cudaMemcpyHostToDevice
+        ));
+    }
+    if (recv_right_count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            d_recv_right,
+            h_recv_right,
+            static_cast<size_t>(recv_right_count) * sizeof(Particle),
+            cudaMemcpyHostToDevice
+        ));
+    }
 
     // Update local count
     cfg_manager.config.n_local = n_new_local;
@@ -1007,30 +1191,73 @@ void MDSimulation::cal_forces(){
 }
 
 
-void MDSimulation::step_single_NVE(){
+void MDSimulation::step_single_NVE() {
     const double dt = cfg_manager.config.dt;
-    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
     int n_local = cfg_manager.config.n_local;
     const double Lx = cfg_manager.config.box_w_global;
     const double Ly = cfg_manager.config.box_h_global;
 
-    int blocks = (n_local + threads - 1)/threads;
-    step_half_vv_kernel<<<blocks, threads>>>(thrust::raw_pointer_cast(d_particles.data()), n_local, dt, Lx, Ly);
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    const int n_cap = cfg_manager.config.n_cap;
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                   "[step_single_NVE] rank {} n_local={} exceeds n_cap={} before step.\n",
+                   cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
 
-    update_d_particles();//exchange particles
-    update_halo();//update halos
+    // first half-kick only if we have local particles
+    if (n_local > 0) {
+        int blocks = (n_local + threads - 1) / threads;
+        // fmt::print("[DEBUG] step_half_vv_kernel\n");
+        step_half_vv_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles.data()),
+            n_local,
+            dt,
+            Lx,
+            Ly
+        );
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
 
-    //After exchange, n_local may have changed; recompute blocks
+    // fmt::print("[DEBUG] update_d_particles\n");
+    // exchange particles and halos between ranks
+    update_d_particles();   // may change cfg_manager.config.n_local
+    // fmt::print("[DEBUG] update_halo\n");
+    update_halo();          // rebuild halos after migration
+
+    //  after exchange, n_local may have changed; recompute and check
     n_local = cfg_manager.config.n_local;
-    blocks  = (n_local + threads - 1) / threads;
-    
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                   "[step_single_NVE] rank {} n_local={} exceeds n_cap={} after exchange.\n",
+                   cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
+
+    // fmt::print("[DEBUG] cal_forces\n");
+    // compute forces with updated locals + halos
     cal_forces();
-    step_2nd_half_vv_kernel<<<blocks, threads>>>(thrust::raw_pointer_cast(d_particles.data()), n_local, dt);
-    // We don't care about vel and acc in halos, so no need to update that.
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // second half-kick only if we have local particles
+    if (n_local > 0) {
+        int blocks = (n_local + threads - 1) / threads;
+        // fmt::print("[DEBUG] step_2nd_half_vv_kernel\n");
+        step_2nd_half_vv_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles.data()),
+            n_local,
+            dt
+        );
+        // We don't care about vel and acc in halos
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
 }
 
 
@@ -1182,3 +1409,8 @@ double MDSimulation::cal_total_U() {
     return U_global;
 }
 
+void MDSimulation::sample_collect(){
+    collect_particles_d2h();
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
