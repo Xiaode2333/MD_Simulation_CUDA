@@ -1,4 +1,4 @@
-# ADD: Top-level CMakeLists.txt (with CUDA toolkit)
+# cmake -B build -S .  -DCMAKE_TOOLCHAIN_FILE=/home/bryson/vcpkg/scripts/buildsystems/vcpkg.cmake  -DVCPKG_TARGET_TRIPLET=x64-linux     -DPython3_EXECUTABLE=/usr/bin/python3
 
 cmake_minimum_required(VERSION 3.18)
 

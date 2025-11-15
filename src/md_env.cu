@@ -7,8 +7,11 @@
 MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm){
     this->cfg_manager = config_manager;
     this->comm = comm;
+    fmt::print("Starting broadcasting params.\n");
     broadcast_params();
+    fmt::print("Params broadcasted.\n");
     allocate_memory();
+    fmt::print("Memory allocated.\n");
     init_particles();
 }
 
@@ -882,13 +885,13 @@ void MDSimulation::init_particles(){
 
         while (n_rows_type0*n_cols_type0 < n_particles_type0){
             spacing_type0 *= 0.99;
-            int n_rows_type0 = static_cast<int>(box_h / spacing_type0);
-            int n_cols_type0 = static_cast<int>(unshifted_x_devide / spacing_type0);
+            n_rows_type0 = static_cast<int>(box_h / spacing_type0);
+            n_cols_type0 = static_cast<int>(unshifted_x_devide / spacing_type0);
         }
         while (n_rows_type0*n_cols_type0 < n_particles_type0){
             spacing_type1 *= 0.99;
-            int n_rows_type1 = static_cast<int>(box_h / spacing_type1);
-            int n_cols_type1 = static_cast<int>((box_w - unshifted_x_devide) / spacing_type1);
+            n_rows_type1 = static_cast<int>(box_h / spacing_type1);
+            n_cols_type1 = static_cast<int>((box_w - unshifted_x_devide) / spacing_type1);
         }
 
         for (int j = 0; j < n_rows_type0; ++j){
@@ -897,7 +900,7 @@ void MDSimulation::init_particles(){
                 if (idx >= n_particles_type0) break;
                 double x = (i + 0.5)*spacing_type0;
                 double y = (j + 0.5)*spacing_type0;
-                h_particles[idx].pos.x = x + shift_dx;
+                h_particles[idx].pos.x = fmod(x + shift_dx, box_w);
                 h_particles[idx].pos.y = y;
                 h_particles[idx].type = 0;
             }
@@ -908,7 +911,7 @@ void MDSimulation::init_particles(){
                 if (idx >= n_particles_global) break;
                 double x = (i + 0.5)*spacing_type1 + unshifted_x_devide;
                 double y = (j + 0.5)*spacing_type1;
-                h_particles[idx].pos.x = x + shift_dx;
+                h_particles[idx].pos.x = fmod(x + shift_dx, box_w);
                 h_particles[idx].pos.y = y;
                 h_particles[idx].type = 1;
             }

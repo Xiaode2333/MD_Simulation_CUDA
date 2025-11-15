@@ -85,7 +85,8 @@ int main(){
     config_manager.config_to_json("tests/env_plot/md_config.json");
     // MPI_Comm comm;
     MDSimulation sim(config_manager, MPI_COMM_WORLD);
-    sim.plot_particles("tests/env_plot/init_frame.png");
+    fmt::print("Particles initialized.");
+    sim.plot_particles("tests/env_plot/init_frame.svg");
 
     return 0;
 }
