@@ -1,4 +1,4 @@
-#include "../include/md_particle.hpp"
+#include "md_particle.hpp"
 
 
 void print_particles(const std::vector<Particle>& particles,

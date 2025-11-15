@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.18)
 
-project(CUDA2_MD LANGUAGES C CXX CUDA)
+project(CUDA2_MD LANGUAGES CXX CUDA)
 
 # ---- language setup ----
 set(CMAKE_CXX_STANDARD 17)
@@ -11,38 +11,27 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # ---- CUDA toolkit (for cuda_runtime.h etc.) ----
-# find_package(CUDAToolkit REQUIRED)
-find_package(MPI REQUIRED)
-find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
-find_package(fmt CONFIG REQUIRED)
-find_package(ZLIB REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 
+# ---- Python 2.7 + NumPy ----
+find_package(Python2 COMPONENTS Interpreter Development NumPy REQUIRED)
 
 execute_process(
-    COMMAND "${Python3_EXECUTABLE}" "-c" "import numpy, sys; sys.stdout.write(numpy.get_include())"
-    OUTPUT_VARIABLE PYTHON_NUMPY_INCLUDE_DIR
-    RESULT_VARIABLE NUMPY_STATUS
-)
-if(NOT NUMPY_STATUS EQUAL 0 OR PYTHON_NUMPY_INCLUDE_DIR STREQUAL "")
-    message(FATAL_ERROR "NumPy not found for Python: ${Python3_EXECUTABLE}. Please ensure python3-numpy is installed.")
-endif()
-
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}" "-c" "import matplotlib"
+    COMMAND "${Python2_EXECUTABLE}" "-c" "import matplotlib"
     RESULT_VARIABLE MATPLOTLIB_IMPORT_RESULT
 )
 if(NOT MATPLOTLIB_IMPORT_RESULT EQUAL 0)
-    message(FATAL_ERROR "Python3 matplotlib module not found for interpreter: ${Python3_EXECUTABLE}")
+    message(FATAL_ERROR "Python2 matplotlib module not found for interpreter: ${Python2_EXECUTABLE}")
 endif()
 
 # ---- nlohmann-json via vcpkg ----
-
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(MPI REQUIRED)
 
 # ---- project directories ----
 set(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(INCLUDE_DIR "${PROJECT_ROOT}/include")
-set(CUDA_DIR    "${PROJECT_ROOT}/src")
+set(CUDA_DIR    "${PROJECT_ROOT}/cuda")
 set(SRC_DIR     "${PROJECT_ROOT}/src")
 set(TESTS_DIR   "${PROJECT_ROOT}/tests")
 set(MATPLOTLIB_CPP_DIR "${PROJECT_ROOT}/external/matplotlib-cpp")
@@ -53,17 +42,9 @@ file(GLOB_RECURSE PROJECT_SOURCES "${SRC_DIR}/*.cpp")
 file(GLOB_RECURSE PROJECT_CUDA    "${CUDA_DIR}/*.cu")
 
 add_library(md_particle_lib
-    # ${PROJECT_HEADERS}
+    ${PROJECT_HEADERS}
     ${PROJECT_SOURCES}
     ${PROJECT_CUDA}
-)
-
-set_source_files_properties(
-    # ${PROJECT_HEADERS}
-    # ${PROJECT_SOURCES}
-    ${PROJECT_CUDA}
-    PROPERTIES
-        LANGUAGE CUDA
 )
 
 target_include_directories(md_particle_lib
@@ -71,25 +52,18 @@ target_include_directories(md_particle_lib
         "${PROJECT_ROOT}"
         "${INCLUDE_DIR}"
         "${MATPLOTLIB_CPP_DIR}"
-        ${Python3_INCLUDE_DIRS}
-        ${PYTHON_NUMPY_INCLUDE_DIR}
-        # ${CUDAToolkit_INCLUDE_DIRS}
+        ${Python2_INCLUDE_DIRS}
+        ${Python2_NumPy_INCLUDE_DIRS}
+        ${CUDAToolkit_INCLUDE_DIRS}
 )
 
 target_link_libraries(md_particle_lib
     PUBLIC
-        fmt::fmt
-        Python3::Python
-        # Python3::NumPy
+        Python2::Python
         nlohmann_json::nlohmann_json
-        # CUDA::cudart
+        CUDA::cudart
         MPI::MPI_CXX
-        ZLIB::ZLIB
 )
-# target_compile_definitions(md_particle_lib
-#     PUBLIC
-#         FMT_HEADER_ONLY
-# )
 
 # ---- test executables: tests/*/*.cpp ----
 file(GLOB_RECURSE TEST_SOURCES "${TESTS_DIR}/*/*.cpp")
@@ -113,8 +87,8 @@ foreach(test_src IN LISTS TEST_SOURCES)
             "${PROJECT_ROOT}"
             "${INCLUDE_DIR}"
             "${MATPLOTLIB_CPP_DIR}"
-            ${Python3_INCLUDE_DIRS}
-            ${Python3_NumPy_INCLUDE_DIRS}
+            ${Python2_INCLUDE_DIRS}
+            ${Python2_NumPy_INCLUDE_DIRS}
             ${CUDAToolkit_INCLUDE_DIRS}
     )
 endforeach()

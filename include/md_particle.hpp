@@ -1,22 +1,22 @@
 #pragma once
 
-#include "../external/matplotlib-cpp/matplotlibcpp.h"
+#include "matplotlibcpp.h"
 
 #include <string>
 #include <vector>
 #include <limits>
 #include <cmath>
+#include <vector_types.h>
 
 
-
-#ifdef __CUDACC__
-    #include <vector_types.h>
-#else
-    struct double2 {
-        double x;
-        double y;
-    };
-#endif
+// #ifdef __CUDACC__
+//     #include <vector_types.h>
+// #else
+//     struct double2 {
+//         double x;
+//         double y;
+//     };
+// #endif
 
 struct Particle {
     double2 pos;

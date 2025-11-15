@@ -1,6 +1,9 @@
 #pragma once
+
+#include "md_particle.hpp"
+
 #include <cuda_runtime.h>
-#include "include/md_particle.hpp"
+
 
 #define CUDA_CHECK(call)                                                \
 do {                                                                    \
@@ -33,6 +36,17 @@ __global__ void mark_halo_kernel(const Particle* particles,
                                  int* flags_left,
                                  int* flags_right);
 
+void launch_mark_halo_kernel(const Particle* particles,
+                                 int n_local,
+                                 double x_min,
+                                 double x_max,
+                                 double Lx,
+                                 double halo_width,
+                                 int* flags_left,
+                                 int* flags_right,
+                                 int threads_per_block
+                                );
+
 //device kernel to pack selected halo particles using prefix-sum positions
 __global__ void pack_halo_kernel(const Particle* particles,
                                  int n_local,
@@ -41,3 +55,45 @@ __global__ void pack_halo_kernel(const Particle* particles,
                                  int max_count,
                                  Particle* out_buf);                              
 
+void launch_pack_halo_kernel(const Particle* particles,
+                                 int n_local,
+                                 const int* flags,
+                                 const int* pos,
+                                 int max_count,
+                                 Particle* out_buf,
+                                 int threads_per_block
+                                );    
+
+//mark particles in d_local with flags_left, flags_right, flags_keep
+__global__ void mark_migration_kernel(const Particle* particles,
+                                      int n_local,
+                                      double x_min,
+                                      double x_max,
+                                      int* flags_left,
+                                      int* flags_right,
+                                      int* flags_keep);                             
+
+                                      
+__global__ void pack_selected_kernel(const Particle* particles,
+                                     int n_local,
+                                     const int* flags,
+                                     const int* pos,
+                                     int n_selected,
+                                     Particle* out);
+                                     
+void launch_mark_migration_kernel(const Particle* d_particles,
+                                                int n_local,
+                                                double x_min,
+                                                double x_max,
+                                                int* d_flags_left,
+                                                int* d_flags_right,
+                                                int* d_flags_keep,
+                                                int threads);                             
+
+void launch_pack_selected_kernel(const Particle* d_particles,
+                                               int n_local,
+                                               const int* d_flags,
+                                               const int* d_pos,
+                                               int n_selected,
+                                               Particle* d_out,
+                                               int threads);                                                

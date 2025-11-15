@@ -1,5 +1,5 @@
-#include "../include/md_common.hpp"
-
+#include "md_common.hpp"
+#include "md_particle.hpp"
 
 void write_exact(std::FILE* fp, const void* buf, std::size_t bytes) {
     if (bytes == 0) {

@@ -1,9 +1,11 @@
 // md_config.cpp
-#include "../include/md_config.hpp"
+#include "md_config.hpp"
 
-MDConfigManager::MDConfigManager(struct MDConfig config) : config(config) {}
+MDConfigManager::MDConfigManager(MDConfig config){
+    this->config = config;
+}
 
-MDConfigManager::~MDConfigManager() {}
+MDConfigManager::~MDConfigManager() = default;
 
 void MDConfigManager::print_config() {
     fmt::print(

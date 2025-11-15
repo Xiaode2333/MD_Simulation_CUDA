@@ -1,13 +1,6 @@
-// g++ ./tests/md_config_load_save/test_config.cpp \
-    ./src/md_config.cpp \
-    -o ./tests/md_config_load_save/test_config \
-    -I${CONDA_PREFIX}/include -L${CONDA_PREFIX}/lib -Wl,-rpath,${CONDA_PREFIX}/lib \
-    -lfmt
-#include "md_config.hpp"
-#include "mpi.h"
+#include "md_env.hpp"
 
 int main(){
-
     MPI_Init(nullptr, nullptr);
     int world_rank = 0;
     int world_size = 0;
@@ -88,11 +81,11 @@ int main(){
         x_min = box_w_global/world_size*world_rank,
         x_max = box_w_global/world_size*(world_rank + 1),
     };
-    MDConfigManager cfg_mng(cfg);
-    cfg_mng.config_to_json("./tests/md_config_load_save/test_config_output.json");
-    MDConfigManager loaded_cfg_mng = MDConfigManager::config_from_json("./tests/md_config_load_save/test_config_output.json"); 
-
-    loaded_cfg_mng.print_config();
+    MDConfigManager config_manager(cfg);
+    config_manager.config_to_json("tests/env_plot/md_config.json");
+    // MPI_Comm comm;
+    MDSimulation sim(config_manager, MPI_COMM_WORLD);
+    sim.plot_particles("tests/env_plot/init_frame.png");
 
     return 0;
 }

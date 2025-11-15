@@ -55,7 +55,9 @@ struct MDConfig {
 class MDConfigManager {
     public:
     
-        MDConfigManager(struct MDConfig config);
+        MDConfigManager() = default;
+        
+        MDConfigManager(MDConfig config);
 
         ~MDConfigManager();
 

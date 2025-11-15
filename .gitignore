@@ -1,6 +1,8 @@
 /results/
 *.out
 /build/
+!/build/vcpkg.json
+!/build/vcpkg-configuration.json
 /cmake-build-*/
 *.o
 *.obj
@@ -23,3 +25,5 @@ compile_commands.json
 .ipynb_checkpoints/
 __pycache__/
 .mypy_cache/
+/.vscode/
+/vcpkg_installed/

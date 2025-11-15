@@ -1,5 +1,10 @@
 {
-    "cmake.configureArgs": [],
+    "cmake.configureArgs": [
+        "-DVCPKG_TARGET_TRIPLET=",
+        "-DVCPKG_APPLOCAL_DEPS=ON",
+        "-DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON",
+        "-DVCPKG_MANIFEST_MODE=OFF"
+    ],
     "files.associations": {
         "cctype": "cpp",
         "clocale": "cpp",
@@ -41,6 +46,10 @@
         "iosfwd": "cpp",
         "limits": "cpp",
         "cmath": "cpp",
+        "set": "cpp",
+        "shared_mutex": "cpp",
+        "cfenv": "cpp",
+        "algorithm": "cpp",
         "cstring": "cpp",
         "array": "cpp",
         "atomic": "cpp",
@@ -52,14 +61,14 @@
         "condition_variable": "cpp",
         "deque": "cpp",
         "map": "cpp",
-        "set": "cpp",
         "unordered_map": "cpp",
-        "algorithm": "cpp",
+        "expected": "cpp",
         "functional": "cpp",
         "iterator": "cpp",
         "memory": "cpp",
         "numeric": "cpp",
         "ratio": "cpp",
+        "source_location": "cpp",
         "string_view": "cpp",
         "system_error": "cpp",
         "tuple": "cpp",
@@ -67,13 +76,21 @@
         "mutex": "cpp",
         "numbers": "cpp",
         "semaphore": "cpp",
-        "shared_mutex": "cpp",
         "span": "cpp",
         "stop_token": "cpp",
         "streambuf": "cpp",
         "thread": "cpp",
-        "cfenv": "cpp",
         "variant": "cpp",
         "format": "cpp"
-    }
+    },
+    "vcpkg.general.enable": true,
+    "vcpkg.target.hostTriplet": "x64-linux",
+    "vcpkg.target.defaultTriplet": "",
+    "vcpkg.target.useStaticLib": false,
+    "cmake.configureSettings": {
+        "CMAKE_TOOLCHAIN_FILE": "/home/bryson/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    },
+    "vcpkg.target.installDependencies": true,
+    "vcpkg.target.preferSystemLibs": false,
+    "vcpkg.target.useManifest": false
 }
