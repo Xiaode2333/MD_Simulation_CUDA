@@ -30,3 +30,4 @@ __pycache__/
 *.png
 *.svg
 *.pdf
+!/docs/figs/*.svg

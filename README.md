@@ -49,26 +49,49 @@ The core goal is to run large-scale MD on clusters with multiple GPUs and nodes,
 
 ---
 
+## Examples of Simulation
+
+<p align="center">
+  <img src="docs/figs/md_snapshot.svg"
+       alt="Snapshot of Simulation"
+       style="width:100%; height:auto;">
+</p>
+
+<p align="center"><em>Snapshot of Simulation.</em></p>
+
+
 ## Code Structure (Typical Layout)
 
 Your repository may look similar to:
 
 ```text
 .
-├─ CMakeLists.txt
-├─ src/
-│  ├─ md_env.cu            # MDSimulation implementation, integrators, force routines
-│  ├─ md_main.cu           # main() and time-stepping loop
-│  ├─ md_chunk_io.cu       # chunked I/O / frame loading and saving (optional)
-│  ├─ md_plot.cpp          # plotting utilities (print_particles)
-│  └─ ...
-├─ include/
-│  ├─ md_env.hpp           # class MDSimulation, MDConfigManager
-│  ├─ md_particle.hpp      # Particle struct definition
-│  ├─ md_config.hpp        # MDConfig, config loading helpers
-│  └─ ...
-├─ tests/
-│  ├─ env_plot/            # small test to initialize and plot one frame
-│  └─ ...
-└─ config/
-   └─ md_config.json       # example configuration file
+├── CMakeLists.txt
+├── README.md
+├── docs
+│   └── figs
+├── external
+│   └── matplotlib-cpp
+├── include
+│   ├── md_common.hpp
+│   ├── md_config.hpp
+│   ├── md_cuda_common.hpp
+│   ├── md_env.hpp
+│   └── md_particle.hpp
+├── scripts
+├── src
+│   ├── md_common.cpp
+│   ├── md_config.cpp
+│   ├── md_cuda_common.cu
+│   ├── md_env.cu
+│   └── md_particle.cpp
+├── tests
+│   ├── env_plot
+│   ├── md_config_load_save
+│   ├── mpi_build_worlds
+│   ├── plot_basic
+│   ├── plot_particles
+│   ├── run_test
+│   └── save_load_frame
+├── vcpkg-configuration.json
+└── vcpkg.json
