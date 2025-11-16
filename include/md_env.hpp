@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
-
+#include <delaunator-header-only.hpp>
 
 
 
@@ -23,17 +23,20 @@ class MDSimulation {
 
         ~MDSimulation();
 
-        double cal_total_energy();
+        void save_env();
+        static MDSimulation load_env();
         void plot_particles(const std::string& filename);//Assume particles are prepared in h_particles on rank 0
         double cal_total_K();
         double cal_total_U();
         void step_single_NVE();// step single timestep, including subdomain exchanges and halo update, but not collect to host. Assume acc updated, and update acc again after finish.
         void step_single_nose_hoover();
         void sample_collect();// before sampling or plot collect all particles to h_particles on rank 0
-
+        void triangulation_plot(bool is_plot, const std::string& filename);//do sample_collect() first. 
     private:
         MDConfigManager cfg_manager;
         MPI_Comm comm;
+
+        std::vector<double> coords; //For triangulation
 
         std::vector<Particle> h_particles; //typically all data is on device. When sampling first transfer them to host
         std::vector<Particle> h_particles_local;

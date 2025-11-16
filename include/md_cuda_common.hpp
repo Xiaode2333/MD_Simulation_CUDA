@@ -50,9 +50,13 @@ __global__ void mark_migration_kernel(const Particle* particles,
                                       int n_local,
                                       double x_min,
                                       double x_max,
-                                      int* flags_left,
-                                      int* flags_right,
-                                      int* flags_keep);                             
+                                      int    rank_idx,   
+                                      int    rank_size, 
+                                      int left_rank,
+                                      int right_rank,
+                                      int*   flags_left,
+                                      int*   flags_right,
+                                      int*   flags_keep);                    
 
                                       
 __global__ void pack_selected_kernel(const Particle* particles,

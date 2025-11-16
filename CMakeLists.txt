@@ -1,3 +1,4 @@
+# cmake -B build -S .   -DCMAKE_TOOLCHAIN_FILE=/home/bryson/vcpkg/scripts/buildsystems/vcpkg.cmake   -DVCPKG_TARGET_TRIPLET=x64-linux   -DPython3_EXECUTABLE=/usr/bin/python3   -DCMAKE_C_COMPILER=mpicc   -DCMAKE_CXX_COMPILER=mpicxx
 cmake_minimum_required(VERSION 3.18)
 
 project(CUDA2_MD LANGUAGES C CXX CUDA)
@@ -14,6 +15,8 @@ find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
+find_path(DELAUNATOR_CPP_INCLUDE_DIRS "delaunator-header-only.hpp")
+
 
 # MPI check
 if(DEFINED ENV{OMPI_CUDA_PREFIX})
@@ -110,6 +113,7 @@ target_include_directories(md_particle_lib
         ${Python3_INCLUDE_DIRS}
         ${PYTHON_NUMPY_INCLUDE_DIR}
         ${OMPI_CUDA_INCLUDE}
+        ${DELAUNATOR_CPP_INCLUDE_DIRS}
 )
 
 target_link_libraries(md_particle_lib

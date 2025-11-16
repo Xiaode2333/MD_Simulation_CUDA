@@ -61,25 +61,30 @@ __global__ void mark_migration_kernel(const Particle* particles,
                                       int n_local,
                                       double x_min,
                                       double x_max,
-                                      int* flags_left,
-                                      int* flags_right,
-                                      int* flags_keep)
+                                      int    rank_idx,   
+                                      int    rank_size, 
+                                      int left_rank,
+                                      int right_rank,
+                                      int*   flags_left,
+                                      int*   flags_right,
+                                      int*   flags_keep)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_local) {
         return;
     }
-
     const double x = particles[idx].pos.x;
 
-    // Particles that left to the left or right subdomain
-    const int to_left  = (x <  x_min) ? 1 : 0;
-    const int to_right = (x >= x_max) ? 1 : 0;
-    const int keep     = (!to_left && !to_right) ? 1 : 0;
-
-    flags_left[idx]  = to_left;
-    flags_right[idx] = to_right;
-    flags_keep[idx]  = keep;
+    if (x >= x_min && x < x_max){
+        flags_left[idx]  = 0;
+        flags_right[idx] = 0;
+        flags_keep[idx]  = 1;
+    }
+    else {
+        flags_left[idx]  = abs(x - x_min) < abs(x - x_max);
+        flags_right[idx] = !flags_left[idx];
+        flags_keep[idx]  = 0;
+    }
 }
 
 __global__ void pack_selected_kernel(const Particle* particles,

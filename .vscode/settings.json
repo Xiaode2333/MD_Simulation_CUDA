@@ -81,7 +81,12 @@
         "streambuf": "cpp",
         "thread": "cpp",
         "variant": "cpp",
-        "format": "cpp"
+        "format": "cpp",
+        "__bit_reference": "cpp",
+        "__hash_table": "cpp",
+        "__split_buffer": "cpp",
+        "__tree": "cpp",
+        "filesystem": "cpp"
     },
     "vcpkg.general.enable": true,
     "vcpkg.target.hostTriplet": "x64-linux",

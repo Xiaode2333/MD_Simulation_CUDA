@@ -29,7 +29,7 @@ MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm){
     cal_forces();
     update_halo();//copy forces to halos
     fmt::print("[Rank] {}/{}. Collecting particles.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
-    collect_particles_d2h();
+    // collect_particles_d2h();
 
     fmt::print("[Rank] {}/{}. MD simulation env initialized.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
 }
@@ -67,7 +67,7 @@ void MDSimulation::broadcast_params() {
                        cfg_manager.config.n_particles_global);
             MPI_Abort(comm, 1);
         }
-
+        
         // If capacity not specified, choose a reasonable default per rank
         if (cfg_manager.config.n_cap <= 0) {
             const double mean_per_rank =
@@ -78,20 +78,18 @@ void MDSimulation::broadcast_params() {
             cfg_manager.config.n_cap = n_cap_default;
         }
 
+        const double sigma_max = std::max(cfg_manager.config.SIGMA_AA, std::max(cfg_manager.config.SIGMA_AB, cfg_manager.config.SIGMA_BB));
+        const double cutoff = cfg_manager.config.cutoff;
+        int halo_cap = static_cast<int>(sigma_max*cutoff*5/cfg_manager.config.box_w_global*cfg_manager.config.n_particles_global);
+        if (halo_cap < 128){
+            halo_cap = 128;
+        }
         // If halo capacities not specified, set to a fraction of n_cap with a floor
         if (cfg_manager.config.halo_left_cap <= 0) {
-            int cap = cfg_manager.config.n_cap / 4;
-            if (cap < 128) {
-                cap = 128;
-            }
-            cfg_manager.config.halo_left_cap = cap;
+            cfg_manager.config.halo_left_cap = halo_cap;
         }
         if (cfg_manager.config.halo_right_cap <= 0) {
-            int cap = cfg_manager.config.n_cap / 4;
-            if (cap < 128) {
-                cap = 128;
-            }
-            cfg_manager.config.halo_right_cap = cap;
+            cfg_manager.config.halo_right_cap = halo_cap;
         }
 
         // x_min, x_max, left_rank, right_rank are per-rank values
@@ -142,9 +140,11 @@ void MDSimulation::allocate_memory(){
     d_particles.resize(cfg_manager.config.n_cap);
     d_particles_halo_left.resize(cfg_manager.config.halo_left_cap);
     d_particles_halo_right.resize(cfg_manager.config.halo_right_cap);
-    d_send_left.resize(cfg_manager.config.halo_left_cap);
-    d_send_right.resize(cfg_manager.config.halo_right_cap);
+    d_send_left.resize(cfg_manager.config.n_cap);
+    d_send_right.resize(cfg_manager.config.n_cap);
     d_keep.resize(cfg_manager.config.n_cap);
+    h_send_left.resize(cfg_manager.config.n_cap);
+    h_send_right.resize(cfg_manager.config.n_cap);
 
     flags_left.reserve(cfg_manager.config.n_cap);
     flags_right.reserve(cfg_manager.config.n_cap);
@@ -152,8 +152,7 @@ void MDSimulation::allocate_memory(){
     pos_left.reserve(cfg_manager.config.n_cap);
     pos_right.reserve(cfg_manager.config.n_cap);
     pos_keep.reserve(cfg_manager.config.n_cap);
-    h_send_left.reserve(cfg_manager.config.n_cap);
-    h_send_right.reserve(cfg_manager.config.n_cap);
+    
 }
 
 
@@ -168,7 +167,6 @@ static inline double pbc_wrap(double x, double L) {
     }
     return x;
 }
-
 
 void MDSimulation::distribute_particles_h2d() {
     const int rank_idx  = cfg_manager.config.rank_idx;
@@ -728,7 +726,6 @@ void MDSimulation::update_halo() {
     CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-
 void MDSimulation::update_d_particles() { // use only d_particles to update particles through particle exchange between ranks
     const int rank_idx  = cfg_manager.config.rank_idx;
     const int rank_size = cfg_manager.config.rank_size;
@@ -810,6 +807,10 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
             n_local,
             x_min,
             x_max,
+            world_rank,
+            world_size,
+            left_rank,
+            right_rank,
             thrust::raw_pointer_cast(flags_left.data()),
             thrust::raw_pointer_cast(flags_right.data()),
             thrust::raw_pointer_cast(flags_keep.data())
@@ -825,7 +826,7 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
         send_right_count = 0;
         keep_count       = 0;
 
-        // ADD: read last entries with cudaMemcpy instead of host indexing
+        // read last entries with cudaMemcpy instead of host indexing
         if (n_local > 0) {
             const int last = n_local - 1;
 
@@ -872,6 +873,10 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
                        rank_idx, keep_count, send_left_count, send_right_count, n_local);
             MPI_Abort(comm, 1);
         }
+
+        // fmt::print(stderr,
+        //                "[DEBUG] rank {} keep={} left={} right={} n_local={}.\n",
+        //                rank_idx, keep_count, send_left_count, send_right_count, n_local);
 
         // d_send_left.resize(send_left_count);
         // d_send_right.resize(send_right_count);
@@ -1063,59 +1068,95 @@ void MDSimulation::init_particles(){
     }
 
     if (rank_idx == 0) {
-        double devide_p = cfg_manager.config.devide_p;
-        int n_particles_global = cfg_manager.config.n_particles_global;
-        int n_particles_type0 = cfg_manager.config.n_particles_type0;
-        int n_particles_type1 = n_particles_global - n_particles_type0;
-        double box_w = cfg_manager.config.box_w_global;
-        double box_h = cfg_manager.config.box_h_global;
+        double devide_p            = cfg_manager.config.devide_p;
+        int    n_particles_global  = cfg_manager.config.n_particles_global;
+        int    n_particles_type0   = cfg_manager.config.n_particles_type0;
+        int    n_particles_type1   = n_particles_global - n_particles_type0;
+        double box_w               = cfg_manager.config.box_w_global;
+        double box_h               = cfg_manager.config.box_h_global;
 
-        double unshifted_x_devide = box_w * devide_p;
-        double shift_dx = box_w * (0.5 - devide_p / 2.0);
-        double T_init = cfg_manager.config.T_init;
-        double mass_type0 = cfg_manager.config.MASS_A;
-        double mass_type1 = cfg_manager.config.MASS_B;
+        double unshifted_x_devide  = box_w * devide_p;
+        double shift_dx            = box_w * (0.5 - devide_p / 2.0);
+        double T_init              = cfg_manager.config.T_init;
+        double mass_type0          = cfg_manager.config.MASS_A;
+        double mass_type1          = cfg_manager.config.MASS_B;
         std::mt19937 rng(12345);
 
-        double spacing_type0 = std::sqrt(unshifted_x_devide*box_h/n_particles_type0);
-        double spacing_type1 = std::sqrt((box_w - unshifted_x_devide)*box_h/n_particles_type1);
-        
-        int n_rows_type0 = static_cast<int>(box_h / spacing_type0 + 1);
-        int n_cols_type0 = static_cast<int>(unshifted_x_devide / spacing_type0 + 1);
-        int n_rows_type1 = static_cast<int>(box_h / spacing_type1 + 1);
-        int n_cols_type1 = static_cast<int>((box_w - unshifted_x_devide) / spacing_type1 + 1);
+        // initial spacing estimates from area / N
+        double spacing_type0 = std::sqrt(unshifted_x_devide * box_h / n_particles_type0);
+        double spacing_type1 = std::sqrt((box_w - unshifted_x_devide) * box_h / n_particles_type1);
 
-        while (n_rows_type0*n_cols_type0 < n_particles_type0){
-            spacing_type0 *= 0.99;
-            n_rows_type0 = static_cast<int>(box_h / spacing_type0 + 1);
-            n_cols_type0 = static_cast<int>(unshifted_x_devide / spacing_type0 + 1);
-        }
-        while (n_rows_type0*n_cols_type0 < n_particles_type0){
-            spacing_type1 *= 0.99;
-            n_rows_type1 = static_cast<int>(box_h / spacing_type1 + 1);
-            n_cols_type1 = static_cast<int>((box_w - unshifted_x_devide) / spacing_type1 + 1);
-        }
+        // helper to adjust spacing and grid so rows*cols >= N, without "+1" and without wrap
+        auto adjust_grid = [](double width, double height,
+                            int n_particles,
+                            double &spacing,
+                            int &n_cols, int &n_rows)
+        {
+            // initial estimate
+            n_rows = static_cast<int>(height / spacing);
+            n_cols = static_cast<int>(width  / spacing);
+            if (n_rows <= 0) n_rows = 1;
+            if (n_cols <= 0) n_cols = 1;
 
-        for (int j = 0; j < n_rows_type0; ++j){
-            for (int i = 0; i < n_cols_type0; ++i){
-                int idx = j*n_cols_type0 + i;
+            // shrink spacing until enough sites
+            while (n_rows * n_cols < n_particles) {
+                spacing *= 0.99;
+                n_rows = static_cast<int>(height / spacing);
+                n_cols = static_cast<int>(width  / spacing);
+                if (n_rows <= 0) n_rows = 1;
+                if (n_cols <= 0) n_cols = 1;
+            }
+        };
+
+        // compute grids for type 0 and type 1 separately
+        int n_rows_type0 = 0, n_cols_type0 = 0;
+        int n_rows_type1 = 0, n_cols_type1 = 0;
+
+        adjust_grid(unshifted_x_devide,       box_h,
+                    n_particles_type0,
+                    spacing_type0, n_cols_type0, n_rows_type0);
+
+        adjust_grid(box_w - unshifted_x_devide, box_h,
+                    n_particles_type1,
+                    spacing_type1, n_cols_type1, n_rows_type1);
+
+        // place type-0 particles, no fmod in y, only wrap x after global shift
+        for (int j = 0; j < n_rows_type0; ++j) {
+            for (int i = 0; i < n_cols_type0; ++i) {
+                int idx = j * n_cols_type0 + i;
                 if (idx >= n_particles_type0) break;
-                double x = (i + 0.5)*spacing_type0;
-                double y = (j + 0.5)*spacing_type0;
-                h_particles[idx].pos.x = fmod(x + shift_dx, box_w);
-                h_particles[idx].pos.y = fmod(y, box_h);
-                h_particles[idx].type = 0;
+
+                double x_local = (i + 0.5) * spacing_type0;
+                double y       = (j + 0.5) * spacing_type0;
+
+                if (x_local >= unshifted_x_devide) continue;
+                if (y       >= box_h)              continue;
+
+                double x = std::fmod(x_local + shift_dx + box_w, box_w);
+
+                h_particles[idx].pos.x = x;
+                h_particles[idx].pos.y = y;
+                h_particles[idx].type  = 0;
             }
         }
-        for (int j = 0; j < n_rows_type1; ++j){
-            for (int i = 0; i < n_cols_type1; ++i){
-                int idx = j*n_cols_type1 + i + n_particles_type0;
+
+        //place type-1 particles in [unshifted_x_devide, box_w)
+        for (int j = 0; j < n_rows_type1; ++j) {
+            for (int i = 0; i < n_cols_type1; ++i) {
+                int idx = j * n_cols_type1 + i + n_particles_type0;
                 if (idx >= n_particles_global) break;
-                double x = (i + 0.5)*spacing_type1 + unshifted_x_devide;
-                double y = (j + 0.5)*spacing_type1;
-                h_particles[idx].pos.x = fmod(x + shift_dx, box_w);
-                h_particles[idx].pos.y = fmod(y, box_h);
-                h_particles[idx].type = 1;
+
+                double x_local = (i + 0.5) * spacing_type1 + unshifted_x_devide;
+                double y       = (j + 0.5) * spacing_type1;
+
+                if (x_local >= box_w) continue;
+                if (y       >= box_h) continue;
+
+                double x = std::fmod(x_local + shift_dx + box_w, box_w);
+
+                h_particles[idx].pos.x = x;
+                h_particles[idx].pos.y = y;
+                h_particles[idx].type  = 1;
             }
         }
 
@@ -1160,14 +1201,13 @@ void MDSimulation::init_particles(){
 }
 
 void MDSimulation::plot_particles(const std::string& filename){
-    if (cfg_manager.config.rank_idx == 0){
-        print_particles(h_particles,
-                            filename,
-                            cfg_manager.config.box_w_global,
-                            cfg_manager.config.box_h_global,
-                            cfg_manager.config.SIGMA_AA,
-                            cfg_manager.config.SIGMA_BB);
-    }
+    if (cfg_manager.config.rank_idx != 0) return;
+    print_particles(h_particles,
+                        filename,
+                        cfg_manager.config.box_w_global,
+                        cfg_manager.config.box_h_global,
+                        cfg_manager.config.SIGMA_AA,
+                        cfg_manager.config.SIGMA_BB);
 }
 
 // update forces and store into d_particles
@@ -1461,4 +1501,197 @@ void MDSimulation::sample_collect(){
     collect_particles_d2h();
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+void _build_periodic_coords(
+    const std::vector<Particle> &h_particles,
+    double Lx,
+    double Ly,
+    std::vector<double> &coords
+) {
+    const int N = static_cast<int>(h_particles.size());
+    if (N <= 0) {
+        coords.clear();
+        return;
+    }
+
+    // We know the exact size: N particles × 9 images × 2 coordinates
+    const std::size_t total_vals = static_cast<std::size_t>(N) * 9u * 2u;
+    coords.resize(total_vals);   // size set, capacity reused if enough
+
+    double *out = coords.data(); // raw pointer for sequential writes
+
+    // Precompute shifts for periodic images: {-Lx, 0, Lx}, {-Ly, 0, Ly}
+    const double shift_x[3] = { -Lx, 0.0, Lx };
+    const double shift_y[3] = { -Ly, 0.0, Ly };
+
+    for (int i = 0; i < N; ++i) {
+        const double x0 = h_particles[i].pos.x;
+        const double y0 = h_particles[i].pos.y;
+
+        for (int ix = 0; ix < 3; ++ix) {
+            const double x = x0 + shift_x[ix];
+            for (int iy = 0; iy < 3; ++iy) {
+                *out++ = x;
+                *out++ = y0 + shift_y[iy];
+            }
+        }
+    }
+}
+
+void MDSimulation::triangulation_plot(bool is_plot, const std::string& filename)
+{
+    namespace plt = matplotlibcpp;
+
+    // only rank 0 does triangulation
+    if (cfg_manager.config.rank_idx != 0) {
+        return;
+    }
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+    const int    N  = cfg_manager.config.n_particles_global;
+
+    _build_periodic_coords(
+        h_particles,
+        Lx,
+        Ly,
+        coords
+    );
+
+    delaunator::Delaunator d(coords);
+
+    // helper lambda to test if a point is inside the base box
+    auto in_base_box = [Lx, Ly](double x, double y) -> bool {
+        return (x >= 0.0 && x < Lx && y >= 0.0 && y < Ly);
+    };
+
+    // prepare figure and particle groups using the same logic as print_particles
+    std::vector<double> xs_a, ys_a;
+    std::vector<double> xs_b, ys_b;
+
+    xs_a.reserve(N);
+    ys_a.reserve(N);
+    xs_b.reserve(N);
+    ys_b.reserve(N);
+
+    if (is_plot) {
+        // wrap positions into [0, Lx) × [0, Ly) and group by type
+        for (int i = 0; i < N; ++i) {
+            double x = h_particles[i].pos.x;
+            double y = h_particles[i].pos.y;
+
+            x -= std::floor(x / Lx) * Lx;
+            y -= std::floor(y / Ly) * Ly;
+
+            if (h_particles[i].type == 0) {
+                xs_a.push_back(x);
+                ys_a.push_back(y);
+            } else {
+                xs_b.push_back(x);
+                ys_b.push_back(y);
+            }
+        }
+
+        // same figure sizing logic as in print_particles
+        double box_w = Lx;
+        double box_h = Ly;
+
+        double fig_width_in = 10.0;
+        const double dpi    = 100.0;
+        const double L_ref  = 50.0;
+        if (box_w > L_ref) {
+            fig_width_in *= (box_w / L_ref);
+            if (fig_width_in > 20.0) {
+                fig_width_in = 20.0;
+            }
+        }
+
+        const int fig_w_px = static_cast<int>(fig_width_in * dpi);
+        int       fig_h_px = static_cast<int>(fig_width_in * (box_h / box_w) * dpi);
+        if (fig_h_px <= 0) {
+            fig_h_px = static_cast<int>(fig_width_in * dpi);
+        }
+
+        plt::figure_size(fig_w_px, fig_h_px);
+
+        // marker sizes similar to print_particles (adapt config names if needed)
+        const double sigma_aa = cfg_manager.config.SIGMA_AA;  // adjust to your config
+        const double sigma_bb = cfg_manager.config.SIGMA_BB;  // adjust to your config
+
+        double radius_a_pts = (sigma_aa * 0.5) * (fig_width_in / box_w) * 72.0;
+        double radius_b_pts = (sigma_bb * 0.5) * (fig_width_in / box_w) * 72.0;
+
+        const double min_radius_pts = 1.0;
+        if (radius_a_pts < min_radius_pts) radius_a_pts = min_radius_pts;
+        if (radius_b_pts < min_radius_pts) radius_b_pts = min_radius_pts;
+
+        const double size_a = radius_a_pts * radius_a_pts;
+        const double size_b = radius_b_pts * radius_b_pts;
+
+        // plt::xlim(0.0, Lx);
+        // plt::ylim(0.0, Ly);
+
+        if (!xs_a.empty()) {
+            plt::scatter(xs_a, ys_a, size_a,
+                         {{"facecolors", "red"},
+                          {"edgecolors", "black"},
+                          {"linewidths", "0.05"}});
+        }
+        if (!xs_b.empty()) {
+            plt::scatter(xs_b, ys_b, size_b,
+                         {{"facecolors", "blue"},
+                          {"edgecolors", "black"},
+                          {"linewidths", "0.05"}});
+        }
+    }
+
+    // Unchanged except for thin mesh lines: loop over triangles and draw mesh
+    for (std::size_t t = 0; t < d.triangles.size(); t += 3) {
+        const std::size_t i0 = d.triangles[t];
+        const std::size_t i1 = d.triangles[t + 1];
+        const std::size_t i2 = d.triangles[t + 2];
+
+        const double x0 = d.coords[2 * i0];
+        const double y0 = d.coords[2 * i0 + 1];
+        const double x1 = d.coords[2 * i1];
+        const double y1 = d.coords[2 * i1 + 1];
+        const double x2 = d.coords[2 * i2];
+        const double y2 = d.coords[2 * i2 + 1];
+
+        const bool inside0 = in_base_box(x0, y0);
+        const bool inside1 = in_base_box(x1, y1);
+        const bool inside2 = in_base_box(x2, y2);
+
+        // If all three vertices are outside, drop this triangle
+        if (!(inside0 || inside1 || inside2)) {
+            continue;
+        }
+
+        // draw triangle edges if plotting
+        if (is_plot) {
+            std::vector<double> tx{ x0, x1, x2, x0 };
+            std::vector<double> ty{ y0, y1, y2, y0 };
+            // thin mesh lines, similar scale to particle edge linewidths
+            plt::plot(tx, ty, {{"linewidth", "0.05"},
+                               {"color",     "black"}});
+        }
+    }
+
+    // finish plot as in print_particles
+    if (is_plot) {
+        plt::plot({0.0, Lx, Lx, 0.0, 0.0},
+                {0.0, 0.0, Ly, Ly, 0.0},
+                {{"c", "black"}, {"linestyle", "--"}});
+
+        plt::axis("equal");
+        plt::xlim(-Lx*0.05, Lx*(1+0.05));
+        plt::ylim(-Ly*0.05, Ly*(1+0.05));
+        plt::xlabel("x");
+        plt::ylabel("y");
+        plt::title("Triangulation mesh");
+        plt::tight_layout();
+        plt::save(filename);
+        plt::close();
+    }
 }

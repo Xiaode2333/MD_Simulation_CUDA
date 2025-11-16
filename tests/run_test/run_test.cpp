@@ -52,8 +52,17 @@ int main(){
     // Make sure all ranks wait until rank 0 finishes creating the directory
     MPI_Barrier(MPI_COMM_WORLD);
     
+    
 
+    if (cfg_mgr.config.rank_idx == 0){
+        sim.plot_particles(frame_dir + fmt::format("frame_init.svg"));
+    }
+    
     for (int step = 0; step < n_steps; step++){
+        // sim.sample_collect();
+        
+        
+        // MPI_Barrier(MPI_COMM_WORLD);
         // sim.step_single_NVE();
         sim.step_single_nose_hoover();
 
@@ -63,14 +72,16 @@ int main(){
             sim.sample_collect();
             if (cfg_mgr.config.rank_idx == 0){
                 fmt::print("[Step] {}. Plotting frame.\n", step);
-                sim.plot_particles(frame_path);
+                // sim.plot_particles(frame_path);
+                sim.triangulation_plot(true, frame_path);
                 fmt::print("[Step] {}. Frame saved at {}.\n", step, frame_path);
             }
+            // MPI_Barrier(MPI_COMM_WORLD);
         }
 
-        // if (cfg_mgr.config.rank_idx == 0){
-        //     fmt::print("[Step] {}.\n", step);
-        // }
+        if (cfg_mgr.config.rank_idx == 0){
+            fmt::print("[Step] {}.\n", step);
+        }
         
 
     }
