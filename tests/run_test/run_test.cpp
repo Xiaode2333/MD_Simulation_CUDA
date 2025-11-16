@@ -1,17 +1,15 @@
 #include "md_env.hpp"
 
 int main(){
-    // carefully assign the following before simulation:
+    // The following configurations will be auto calculated in init
     // "rank_idx": 0,
-    // "rank_size": 4,
     // "right_rank": 0,
     // "left_rank": 0,
-    // "save_dt_interval": 0.1,
-    // "x_max": 143.10835055998655,
+    // "x_max": 0,
     // "x_min": 0.0,
-    // "n_cap": 4096,
-    // "halo_left_cap": 1024,
-    // "halo_right_cap": 1024
+    // "n_cap": 0,
+    // "halo_left_cap": 0,
+    // "halo_right_cap": 0
 
     const std::string cfg_path = "./tests/run_test/config.json";
     MDConfigManager cfg_mgr;
@@ -56,7 +54,8 @@ int main(){
     
 
     for (int step = 0; step < n_steps; step++){
-        sim.step_single_NVE();
+        // sim.step_single_NVE();
+        sim.step_single_nose_hoover();
 
         if (step % n_record_interval == 0) {
             std::string frame_path = frame_dir + fmt::format("frame_step_{}.svg", step);
@@ -69,9 +68,9 @@ int main(){
             }
         }
 
-        if (cfg_mgr.config.rank_idx == 0){
-            fmt::print("[Step] {}.\n", step);
-        }
+        // if (cfg_mgr.config.rank_idx == 0){
+        //     fmt::print("[Step] {}.\n", step);
+        // }
         
 
     }

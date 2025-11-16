@@ -74,7 +74,7 @@ void MDSimulation::broadcast_params() {
                 static_cast<double>(cfg_manager.config.n_particles_global) /
                 static_cast<double>(world_size);
             const int n_cap_default =
-                static_cast<int>(mean_per_rank * 1.5) + 128;
+                static_cast<int>(mean_per_rank * 2) + 128;
             cfg_manager.config.n_cap = n_cap_default;
         }
 
@@ -1080,20 +1080,20 @@ void MDSimulation::init_particles(){
         double spacing_type0 = std::sqrt(unshifted_x_devide*box_h/n_particles_type0);
         double spacing_type1 = std::sqrt((box_w - unshifted_x_devide)*box_h/n_particles_type1);
         
-        int n_rows_type0 = static_cast<int>(box_h / spacing_type0);
-        int n_cols_type0 = static_cast<int>(unshifted_x_devide / spacing_type0);
-        int n_rows_type1 = static_cast<int>(box_h / spacing_type1);
-        int n_cols_type1 = static_cast<int>((box_w - unshifted_x_devide) / spacing_type1);
+        int n_rows_type0 = static_cast<int>(box_h / spacing_type0 + 1);
+        int n_cols_type0 = static_cast<int>(unshifted_x_devide / spacing_type0 + 1);
+        int n_rows_type1 = static_cast<int>(box_h / spacing_type1 + 1);
+        int n_cols_type1 = static_cast<int>((box_w - unshifted_x_devide) / spacing_type1 + 1);
 
         while (n_rows_type0*n_cols_type0 < n_particles_type0){
             spacing_type0 *= 0.99;
-            n_rows_type0 = static_cast<int>(box_h / spacing_type0);
-            n_cols_type0 = static_cast<int>(unshifted_x_devide / spacing_type0);
+            n_rows_type0 = static_cast<int>(box_h / spacing_type0 + 1);
+            n_cols_type0 = static_cast<int>(unshifted_x_devide / spacing_type0 + 1);
         }
         while (n_rows_type0*n_cols_type0 < n_particles_type0){
             spacing_type1 *= 0.99;
-            n_rows_type1 = static_cast<int>(box_h / spacing_type1);
-            n_cols_type1 = static_cast<int>((box_w - unshifted_x_devide) / spacing_type1);
+            n_rows_type1 = static_cast<int>(box_h / spacing_type1 + 1);
+            n_cols_type1 = static_cast<int>((box_w - unshifted_x_devide) / spacing_type1 + 1);
         }
 
         for (int j = 0; j < n_rows_type0; ++j){
@@ -1103,7 +1103,7 @@ void MDSimulation::init_particles(){
                 double x = (i + 0.5)*spacing_type0;
                 double y = (j + 0.5)*spacing_type0;
                 h_particles[idx].pos.x = fmod(x + shift_dx, box_w);
-                h_particles[idx].pos.y = y;
+                h_particles[idx].pos.y = fmod(y, box_h);
                 h_particles[idx].type = 0;
             }
         }
@@ -1114,7 +1114,7 @@ void MDSimulation::init_particles(){
                 double x = (i + 0.5)*spacing_type1 + unshifted_x_devide;
                 double y = (j + 0.5)*spacing_type1;
                 h_particles[idx].pos.x = fmod(x + shift_dx, box_w);
-                h_particles[idx].pos.y = y;
+                h_particles[idx].pos.y = fmod(y, box_h);
                 h_particles[idx].type = 1;
             }
         }
@@ -1226,10 +1226,8 @@ void MDSimulation::step_single_NVE() {
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
-    // fmt::print("[DEBUG] update_d_particles\n");
     // exchange particles and halos between ranks
     update_d_particles();   // may change cfg_manager.config.n_local
-    // fmt::print("[DEBUG] update_halo\n");
     update_halo();          // rebuild halos after migration
 
     //  after exchange, n_local may have changed; recompute and check
@@ -1241,14 +1239,12 @@ void MDSimulation::step_single_NVE() {
         MPI_Abort(comm, 1);
     }
 
-    // fmt::print("[DEBUG] cal_forces\n");
     // compute forces with updated locals + halos
     cal_forces();
 
     // second half-kick only if we have local particles
     if (n_local > 0) {
         int blocks = (n_local + threads - 1) / threads;
-        // fmt::print("[DEBUG] step_2nd_half_vv_kernel\n");
         step_2nd_half_vv_kernel<<<blocks, threads>>>(
             thrust::raw_pointer_cast(d_particles.data()),
             n_local,
@@ -1262,48 +1258,96 @@ void MDSimulation::step_single_NVE() {
 
 
 void MDSimulation::step_single_nose_hoover() {
-    const double dt      = cfg_manager.config.dt;
-    const int    threads = cfg_manager.config.THREADS_PER_BLOCK;
-    const double Lx      = cfg_manager.config.box_w_global;
-    const double Ly      = cfg_manager.config.box_h_global;
+    MPI_Barrier(comm);
+    const double dt = cfg_manager.config.dt;
+
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
 
     int n_local = cfg_manager.config.n_local;
-    int blocks  = (n_local + threads - 1) / threads;
+    const int n_cap = cfg_manager.config.n_cap;
 
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                   "[step_single_nose_hoover] rank {} n_local={} exceeds n_cap={} before step.\n",
+                   cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
+
+    // global kinetic energy before first half update of xi
     double K_global = cal_total_K();
+    // fmt::print("[DEBUG] K_global = {:.4f}\n", K_global);
 
-    const double g_dof = 2*cfg_manager.config.n_particles_global - 2;
+    const double g_dof = 2.0 * cfg_manager.config.n_particles_global - 2.0;
     const double T0    = cfg_manager.config.T_target;
-    const double Q     = cfg_manager.config.Q;       // thermostat mass
+    const double Q     = cfg_manager.config.Q;  // thermostat mass
 
+    // first half update of xi
     xi += 0.5 * dt * (2.0 * K_global - g_dof * T0) / Q;
 
-    step_half_vv_nh_kernel<<<blocks, threads>>>(
-        thrust::raw_pointer_cast(d_particles.data()),
-        n_local, dt, xi, Lx, Ly
-    );
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    //first half Nose–Hoover VV step only if we have local particles
+    if (n_local > 0) {
+        int blocks = (n_local + threads - 1) / threads;
 
+        step_half_vv_nh_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles.data()),
+            n_local,
+            dt,
+            xi,
+            Lx,
+            Ly
+        );
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    // exchange particles and rebuild halos, may change n_local
     update_d_particles();
     update_halo();
 
+    // recompute n_local after migration and check capacity
+    n_local = cfg_manager.config.n_local;
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                   "[step_single_nose_hoover] rank {} n_local={} exceeds n_cap={} after exchange.\n",
+                   cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
+    // End of ADD
+
+    // compute forces with updated locals + halos
     cal_forces();
 
-    n_local = cfg_manager.config.n_local;//n_local may have changed after migration
-    blocks  = (n_local + threads - 1) / threads;
-
+    // global kinetic energy after forces (velocities unchanged by forces, but
+    // particles may have migrated between ranks)
     K_global = cal_total_K();
+    // fmt::print("[DEBUG] K_global = {:.4f}\n", K_global);
 
+    // second half update of xi
     xi += 0.5 * dt * (2.0 * K_global - g_dof * T0) / Q;
 
-    step_2nd_half_vv_nh_kernel<<<blocks, threads>>>(
-        thrust::raw_pointer_cast(d_particles.data()),
-        n_local, dt, xi
-    );
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    //second half Nose–Hoover VV step only if we have local particles
+    if (n_local > 0) {
+        int blocks = (n_local + threads - 1) / threads;
+
+        step_2nd_half_vv_nh_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles.data()),
+            n_local,
+            dt,
+            xi
+        );
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+    K_global = cal_total_K();
+    // fmt::print("[DEBUG] K_global = {:.4f} After 2nd kick\n", K_global);
 }
+
 
 double MDSimulation::cal_total_K(){
     double K_local  = compute_kinetic_energy_local();
@@ -1345,6 +1389,10 @@ double MDSimulation::compute_kinetic_energy_local(){
     double K_local = 0.0;
     for (int i = 0; i < blocks; ++i) {
         K_local += h_partial[i];
+        // if (std::isnan(h_partial[i]) || std::isinf(h_partial[i])){
+        //     fmt::print("[DEBUG] Block {} has invalid h_partial.\n", i);
+        // }
+        
     }
     return K_local;
 }

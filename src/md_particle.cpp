@@ -84,11 +84,12 @@ void print_particles(const std::vector<Particle>& particles,
     //    r_px = sqrt(s/pi) * dpi / 72
     //    => s = pi * (r_px * 72 / dpi)^2
     // ----------------------------
-    const double dpi = 500.0;
-    const double pi = 3.141592653589793;
+    const double dpi = 100.0;
+    const double pi  = 3.141592653589793;
 
-    const int fig_w_px = 10 * static_cast<int>(box_w);
-    int  fig_h_px = static_cast<int>(fig_w_px * (box_h / box_w));
+    // Figure size in pixels
+    const int  fig_w_px = 10 * static_cast<int>(box_w);
+    int        fig_h_px = static_cast<int>(fig_w_px * (box_h / box_w));
     if (fig_h_px <= 0) {
         fig_h_px = 800;
     }
@@ -96,17 +97,25 @@ void print_particles(const std::vector<Particle>& particles,
     plt::figure_size(fig_w_px, fig_h_px);
     plt::figure();
 
-    const double r_a_phys = std::pow(2, 1.0 / 6.0) * sigma_aa;
-    const double r_b_phys = std::pow(2, 1.0 / 6.0) * sigma_bb;
+    // Lennard-Jones "contact" radii in simulation units
+    const double r_a_phys = std::pow(2.0, 1.0 / 6.0) * sigma_aa;
+    const double r_b_phys = std::pow(2.0, 1.0 / 6.0) * sigma_bb;
 
-    const double R_a_px = r_a_phys * static_cast<double>(fig_w_px) / box_w;
-    const double R_b_px = r_b_phys * static_cast<double>(fig_w_px) / box_w;
+    // Convert physical radii -> pixels (x-direction sets scale)
+    const double px_per_unit = static_cast<double>(fig_w_px) / box_w;
+    const double R_a_px      = r_a_phys * px_per_unit;
+    const double R_b_px      = r_b_phys * px_per_unit;
 
-    const double r_a_pts = R_a_px * 36.0 / dpi;
-    const double r_b_pts = R_b_px * 36.0 / dpi;
+    // Pixels -> points: 1 pt = 1/72 inch
+    // pixels = dpi * inches = dpi * (points / 72) => points = pixels * 72 / dpi
+    const double r_a_pts = R_a_px * 72.0 / dpi;
+    const double r_b_pts = R_b_px * 72.0 / dpi;
 
-    const double size_a = pi * r_a_pts * r_a_pts; // s in points^2
-    const double size_b = pi * r_b_pts * r_b_pts;
+    // Area in points^2 for scatter marker size
+    // Optional scale factor to adjust overall appearance
+    const double marker_scale = 0.5;  // tweak 0.3–1.0 as you like
+    const double size_a = marker_scale * pi * r_a_pts * r_a_pts;
+    const double size_b = marker_scale * pi * r_b_pts * r_b_pts;
 
     // ----------------------------
     // 4) Plot

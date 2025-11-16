@@ -191,6 +191,7 @@ __global__ void li_force_kernel(Particle* particles,
         const float rc_sq_f = rc_f * rc_f;
         const float dr_sq_f = dx_f * dx_f + dy_f * dy_f;
 
+
         // Proper logical and, pairwise in float
         if (dr_sq_f > 0.0f && dr_sq_f < rc_sq_f) {
             const float sigma_sq_f = sigma_f * sigma_f;
@@ -199,11 +200,20 @@ __global__ void li_force_kernel(Particle* particles,
             const float sr6_f      = sr2_f * sr2_f * sr2_f;
             const float sr12_f     = sr6_f * sr6_f;
 
-            const float tmp_f = 24.0f * epsilon_f * (2.0f * sr12_f - sr6_f) * r2_inv_f;
+            // if (!isfinite(sr12_f)){
+            //     printf("[DEBUG] sr12_f is invalid.\n");
+            // }
 
+            const float tmp_f = 24.0f * epsilon_f * (2.0f * sr12_f - sr6_f) * r2_inv_f;
+            // if (!isfinite(tmp_f)){
+            //     printf("[DEBUG] tmp_f is invalid.\n");
+            // }
             // Accumulate in double
             fi_d.x += static_cast<double>(tmp_f * dx_f);
             fi_d.y += static_cast<double>(tmp_f * dy_f);
+            // if (!isfinite(fi_d.x) || !isfinite(fi_d.y)){
+            //     printf("[DEBUG] fi_d is invalid.\n");
+            // }
         }
     }
 
@@ -303,6 +313,9 @@ __global__ void cal_local_K_kernel(const Particle* __restrict__ particles,
         const Particle p = particles[idx];
         const double vx = p.vel.x;
         const double vy = p.vel.y;
+        // if (std::isinf(vx) || std::isfinite(vy) || std::isnan(vx) || std::isnan(vy)){
+        //     printf("[DEBUG] idx %d has invalid velocity. n_local = %d\n", idx, n_local);
+        // }
         const double m  = (p.type == 0 ? mass_A : mass_B);
         k = 0.5 * m * (vx * vx + vy * vy);  // 2D kinetic energy
     }
