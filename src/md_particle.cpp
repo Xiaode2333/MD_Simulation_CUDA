@@ -84,55 +84,62 @@ void print_particles(const std::vector<Particle>& particles,
     //    r_px = sqrt(s/pi) * dpi / 72
     //    => s = pi * (r_px * 72 / dpi)^2
     // ----------------------------
-    const double dpi = 100.0;
-    const double pi  = 3.141592653589793;
+    const double fig_width_in = 10.0;   // same as fig_width_in in Python
+    const double dpi          = 300.0;  // same as dpi in Python
 
-    // Figure size in pixels
-    const int  fig_w_px = 10 * static_cast<int>(box_w);
-    int        fig_h_px = static_cast<int>(fig_w_px * (box_h / box_w));
+    // Figure size in pixels: width = fig_width_in * dpi
+    const int fig_w_px = static_cast<int>(fig_width_in * dpi);
+    int       fig_h_px = static_cast<int>(fig_width_in * (box_h / box_w) * dpi);
     if (fig_h_px <= 0) {
-        fig_h_px = 800;
+        fig_h_px = static_cast<int>(fig_width_in * dpi);
     }
 
     plt::figure_size(fig_w_px, fig_h_px);
     plt::figure();
 
-    // Lennard-Jones "contact" radii in simulation units
-    const double r_a_phys = std::pow(2.0, 1.0 / 6.0) * sigma_aa;
-    const double r_b_phys = std::pow(2.0, 1.0 / 6.0) * sigma_bb;
+    // ----------------------------------------
+    // Marker sizes (in points^2), per type
+    // Python logic:
+    //   radius_points = (sigma * 0.5) * (fig_width_in / box_w) * 72.0
+    //   marker_size   = radius_points ** 2
+    // Here we do it per species using sigma_aa, sigma_bb.
+    // ----------------------------------------
+    const double sigma_a = sigma_aa;
+    const double sigma_b = sigma_bb;
 
-    // Convert physical radii -> pixels (x-direction sets scale)
-    const double px_per_unit = static_cast<double>(fig_w_px) / box_w;
-    const double R_a_px      = r_a_phys * px_per_unit;
-    const double R_b_px      = r_b_phys * px_per_unit;
+    // 1 unit in box corresponds to (fig_width_in / box_w) inches on the figure.
+    // 1 inch = 72 points, so:
+    //   radius_points = (sigma/2) * (fig_width_in / box_w) * 72
+    const double radius_a_pts = (sigma_a * 0.5) * (fig_width_in / box_w) * 72.0;
+    const double radius_b_pts = (sigma_b * 0.5) * (fig_width_in / box_w) * 72.0;
 
-    // Pixels -> points: 1 pt = 1/72 inch
-    // pixels = dpi * inches = dpi * (points / 72) => points = pixels * 72 / dpi
-    const double r_a_pts = R_a_px * 72.0 / dpi;
-    const double r_b_pts = R_b_px * 72.0 / dpi;
-
-    // Area in points^2 for scatter marker size
-    // Optional scale factor to adjust overall appearance
-    const double marker_scale = 0.5;  // tweak 0.3–1.0 as you like
-    const double size_a = marker_scale * pi * r_a_pts * r_a_pts;
-    const double size_b = marker_scale * pi * r_b_pts * r_b_pts;
+    // Scatter s argument = area in points^2
+    const double size_a = radius_a_pts * radius_a_pts;
+    const double size_b = radius_b_pts * radius_b_pts;
 
     // ----------------------------
     // 4) Plot
     // ----------------------------
-    plt::xlim(x_left, x_right);
+    plt::xlim(x_left,  x_right);
     plt::ylim(y_bottom, y_top);
 
     if (!xs_a.empty()) {
-        plt::scatter(xs_a, ys_a, size_a, {{"c", "red"}});
+        plt::scatter(xs_a, ys_a, size_a,
+                    {{"facecolors", "red"},
+                    {"edgecolors", "black"},
+                    {"linewidths", "0.1"}});
     }
     if (!xs_b.empty()) {
-        plt::scatter(xs_b, ys_b, size_b, {{"c", "blue"}});
+        plt::scatter(xs_b, ys_b, size_b,
+                    {{"facecolors", "blue"},
+                    {"edgecolors", "black"},
+                    {"linewidths", "0.1"}});
     }
+
     if (draw_box) {
         plt::plot({x_left, x_right, x_right, x_left, x_left},
-                  {y_bottom, y_bottom, y_top, y_top, y_bottom},
-                  {{"c", "black"}, {"linestyle", "--"}});
+                {y_bottom, y_bottom, y_top, y_top, y_bottom},
+                {{"c", "black"}, {"linestyle", "--"}});
     }
 
     plt::xlabel("x");
