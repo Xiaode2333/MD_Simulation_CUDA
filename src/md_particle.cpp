@@ -84,10 +84,20 @@ void print_particles(const std::vector<Particle>& particles,
     //    r_px = sqrt(s/pi) * dpi / 72
     //    => s = pi * (r_px * 72 / dpi)^2
     // ----------------------------
-    const double fig_width_in = 10.0;   // same as fig_width_in in Python
-    const double dpi          = 300.0;  // same as dpi in Python
+    double fig_width_in = 10.0;
+    const double dpi    = 100.0;
 
-    // Figure size in pixels: width = fig_width_in * dpi
+    // Optionally: scale figure width with box size so very large boxes
+    // get bigger images (you can tune these numbers)
+    const double L_ref = 50.0;     // "typical" box width in your units
+    if (box_w > L_ref) {
+        fig_width_in *= (box_w / L_ref);   // grow width with box_w
+        if (fig_width_in > 50.0) {
+            fig_width_in = 50.0;           // clamp to avoid huge files
+        }
+    }
+
+    // Convert inches → pixels for matplotlib-cpp
     const int fig_w_px = static_cast<int>(fig_width_in * dpi);
     int       fig_h_px = static_cast<int>(fig_width_in * (box_h / box_w) * dpi);
     if (fig_h_px <= 0) {
@@ -95,25 +105,19 @@ void print_particles(const std::vector<Particle>& particles,
     }
 
     plt::figure_size(fig_w_px, fig_h_px);
-    plt::figure();
+    // plt::figure();
 
-    // ----------------------------------------
-    // Marker sizes (in points^2), per type
-    // Python logic:
-    //   radius_points = (sigma * 0.5) * (fig_width_in / box_w) * 72.0
-    //   marker_size   = radius_points ** 2
-    // Here we do it per species using sigma_aa, sigma_bb.
-    // ----------------------------------------
+    // Marker sizes (same logic as before)
     const double sigma_a = sigma_aa;
     const double sigma_b = sigma_bb;
 
-    // 1 unit in box corresponds to (fig_width_in / box_w) inches on the figure.
-    // 1 inch = 72 points, so:
-    //   radius_points = (sigma/2) * (fig_width_in / box_w) * 72
-    const double radius_a_pts = (sigma_a * 0.5) * (fig_width_in / box_w) * 72.0;
-    const double radius_b_pts = (sigma_b * 0.5) * (fig_width_in / box_w) * 72.0;
+    double radius_a_pts = (sigma_a * 1.12) * (fig_width_in / box_w) * 72.0;
+    double radius_b_pts = (sigma_b * 1.12) * (fig_width_in / box_w) * 72.0;
 
-    // Scatter s argument = area in points^2
+    const double min_radius_pts = 1.0;
+    if (radius_a_pts < min_radius_pts) radius_a_pts = min_radius_pts;
+    if (radius_b_pts < min_radius_pts) radius_b_pts = min_radius_pts;
+
     const double size_a = radius_a_pts * radius_a_pts;
     const double size_b = radius_b_pts * radius_b_pts;
 
