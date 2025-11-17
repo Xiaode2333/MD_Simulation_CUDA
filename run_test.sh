@@ -6,6 +6,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=32G
+#SBATCH --cpu-bind=none
 
 ./set_slurm_env.sh
 
