@@ -472,12 +472,12 @@ __global__ void cal_local_U_kernel(const Particle* __restrict__ particles,
 __global__ void local_density_profile_kernel(const Particle* __restrict__ particles, int n_local, int n_bins_per_rank,
                                    double xmin, double xmax,
                                    int* count_A, int* count_B){
-    extern __shared__ int sdata[];
+    extern __shared__ int s_int_data[];
     const int tid = threadIdx.x;
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    int* sA = sdata;
-    int* sB = sdata + n_bins_per_rank;
+    int* sA = s_int_data;
+    int* sB = s_int_data + n_bins_per_rank;
 
     for (int i = tid; i < n_bins_per_rank; i += blockDim.x) {
         sA[i] = 0.0;
