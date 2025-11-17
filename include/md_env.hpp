@@ -32,6 +32,7 @@ class MDSimulation {
         void step_single_nose_hoover();
         void sample_collect();// before sampling or plot collect all particles to h_particles on rank 0
         void triangulation_plot(bool is_plot, const std::string& filename);//do sample_collect() first. 
+        std::vector<double> get_density_profile(int n_bins_per_rank); //first half NA, second half NB, with total len n_bins_per_rank*rank_size
     private:
         MDConfigManager cfg_manager;
         MPI_Comm comm;

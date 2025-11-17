@@ -68,13 +68,27 @@ int main(){
 
         if (step % n_record_interval == 0) {
             std::string frame_path = frame_dir + fmt::format("frame_step_{}.svg", step);
+            std::string frame_triangulation_path = frame_dir + fmt::format("triangulation_frame_step_{}.svg", step);
             // before sampling or plot collect all particles to h_particles on rank 0
             sim.sample_collect();
             if (cfg_mgr.config.rank_idx == 0){
                 fmt::print("[Step] {}. Plotting frame.\n", step);
-                // sim.plot_particles(frame_path);
-                sim.triangulation_plot(true, frame_path);
+                sim.plot_particles(frame_path);
+                sim.triangulation_plot(true, frame_triangulation_path);
                 fmt::print("[Step] {}. Frame saved at {}.\n", step, frame_path);
+            }
+
+            int n_bins_per_rank = 16;
+            std::vector<double> density_profile = sim.get_density_profile(n_bins_per_rank);
+
+            const int total_bins = n_bins_per_rank * cfg_mgr.config.rank_size;
+            std::vector<double> density_A(density_profile.begin(),
+                                        density_profile.begin() + total_bins);
+            std::vector<double> density_B(density_profile.begin() + total_bins,
+                                        density_profile.end());
+
+            if (cfg_mgr.config.rank_idx == 0){
+                fmt::print("[Step] {}. density profile: N_A: {}\n N_B: {}.\n", step, density_A, density_B);
             }
             // MPI_Barrier(MPI_COMM_WORLD);
         }

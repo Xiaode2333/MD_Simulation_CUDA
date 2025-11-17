@@ -467,3 +467,55 @@ __global__ void cal_local_U_kernel(const Particle* __restrict__ particles,
         partial_sums[blockIdx.x] = sdata[0];
     }
 }
+
+
+__global__ void local_density_profile_kernel(const Particle* __restrict__ particles, int n_local, int n_bins_per_rank,
+                                   double xmin, double xmax,
+                                   int* count_A, int* count_B){
+    extern __shared__ int sdata[];
+    const int tid = threadIdx.x;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int* sA = sdata;
+    int* sB = sdata + n_bins_per_rank;
+
+    for (int i = tid; i < n_bins_per_rank; i += blockDim.x) {
+        sA[i] = 0.0;
+        sB[i] = 0.0;
+    }
+    __syncthreads();
+
+    if (idx < n_local) {
+        const Particle p = particles[idx];
+        const double x  = p.pos.x;
+        if (x >= xmin && x <= xmax){
+            const double Lx_local = xmax - xmin;
+            int bin = static_cast<int>((x - xmin) / Lx_local * n_bins_per_rank);
+
+            // Guard against possible roundoff
+            if (bin < 0) {
+                bin = 0;
+            } else if (bin >= n_bins_per_rank) {
+                bin = n_bins_per_rank - 1;
+            }
+
+            if (p.type == 0) {
+                atomicAdd(&sA[bin], 1);
+            } else {
+                atomicAdd(&sB[bin], 1);
+            }
+        }
+    }
+    __syncthreads();
+
+    for (int i = tid; i < n_bins_per_rank; i += blockDim.x) {
+        const double valA = sA[i];
+        const double valB = sB[i];
+        if (valA != 0) {
+            atomicAdd(&count_A[i], valA);
+        }
+        if (valB != 0) {
+            atomicAdd(&count_B[i], valB);
+        }
+    }
+}
