@@ -1695,3 +1695,94 @@ void MDSimulation::triangulation_plot(bool is_plot, const std::string& filename)
         plt::close();
     }
 }
+
+
+std::vector<double> MDSimulation::get_density_profile(int n_bins_per_rank)
+{
+    std::vector<int> count_A(n_bins_per_rank, 0);
+    std::vector<int> count_B(n_bins_per_rank, 0);
+
+    const int n_local = cfg_manager.config.n_local;
+    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    const double xmin = cfg_manager.config.x_min;
+    const double xmax = cfg_manager.config.x_max;
+
+    int blocks = (n_local + threads - 1)/threads;
+    size_t shared_mem_size = static_cast<size_t>(2 * n_bins_per_rank * sizeof(int));
+
+    thrust::device_vector<int> d_count_A(n_bins_per_rank, 0);
+    thrust::device_vector<int> d_count_B(n_bins_per_rank, 0);
+
+    if (blocks > 0) {
+        local_density_profile_kernel<<<blocks, threads, shared_mem_size>>>(
+            thrust::raw_pointer_cast(d_particles.data()),
+            n_local,
+            n_bins_per_rank,
+            xmin,
+            xmax,
+            thrust::raw_pointer_cast(d_count_A.data()),
+            thrust::raw_pointer_cast(d_count_B.data())
+        );
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    // Copy back to host
+    if (n_bins_per_rank > 0) {
+        thrust::copy(d_count_A.begin(), d_count_A.end(), count_A.begin());
+        thrust::copy(d_count_B.begin(), d_count_B.end(), count_B.begin());
+    }
+
+    // MPI: gather from all ranks
+    int world_size = 1;
+    int world_rank = 0;
+    MPI_Comm_size(comm, &world_size);
+    MPI_Comm_rank(comm, &world_rank);
+
+    const int local_bins = n_bins_per_rank;
+    const int total_bins = local_bins * world_size;
+
+    std::vector<int> all_A;
+    std::vector<int> all_B;
+
+    if (world_rank == 0) {
+        all_A.resize(total_bins);
+        all_B.resize(total_bins);
+    }
+
+    MPI_Gather(
+        count_A.data(), local_bins, MPI_INT,
+        world_rank == 0 ? all_A.data() : nullptr, local_bins, MPI_INT,
+        0, comm
+    );
+    MPI_Gather(
+        count_B.data(), local_bins, MPI_INT,
+        world_rank == 0 ? all_B.data() : nullptr, local_bins, MPI_INT,
+        0, comm
+    );
+
+    // Pack into result: first half NA, second half NB
+    std::vector<double> result;
+    if (world_rank == 0) {
+        result.resize(static_cast<std::size_t>(total_bins) * 2u);
+        for (int i = 0; i < total_bins; ++i) {
+            result[i]               = static_cast<double>(all_A[i]);          // NA
+            result[i + total_bins]  = static_cast<double>(all_B[i]);          // NB
+        }
+    } else {
+        // Non-root ranks still get the full profile (optional but convenient)
+        result.resize(static_cast<std::size_t>(total_bins) * 2u);
+    }
+
+    // Broadcast packed profile to all ranks
+    if (total_bins > 0) {
+        MPI_Bcast(result.data(),
+                  total_bins * 2,
+                  MPI_DOUBLE,
+                  0,
+                  comm);
+    }
+
+    return result;
+    
+}

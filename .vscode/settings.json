@@ -1,9 +1,9 @@
 {
     "cmake.configureArgs": [
-        "-DVCPKG_TARGET_TRIPLET=",
         "-DVCPKG_APPLOCAL_DEPS=ON",
         "-DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON",
-        "-DVCPKG_MANIFEST_MODE=OFF"
+        "-DVCPKG_MANIFEST_MODE=ON",
+        "-DVCPKG_TARGET_TRIPLET=arm-neon-android"
     ],
     "files.associations": {
         "cctype": "cpp",
@@ -90,12 +90,12 @@
     },
     "vcpkg.general.enable": true,
     "vcpkg.target.hostTriplet": "x64-linux",
-    "vcpkg.target.defaultTriplet": "",
+    "vcpkg.target.defaultTriplet": "arm-neon-android",
     "vcpkg.target.useStaticLib": false,
     "cmake.configureSettings": {
         "CMAKE_TOOLCHAIN_FILE": "/home/bryson/vcpkg/scripts/buildsystems/vcpkg.cmake"
     },
     "vcpkg.target.installDependencies": true,
     "vcpkg.target.preferSystemLibs": false,
-    "vcpkg.target.useManifest": false
+    "vcpkg.target.useManifest": true
 }

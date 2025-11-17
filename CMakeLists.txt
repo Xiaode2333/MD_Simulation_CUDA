@@ -15,7 +15,9 @@ find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
+
 find_path(DELAUNATOR_CPP_INCLUDE_DIRS "delaunator-header-only.hpp")
+find_path(MATPLOTLIB_CPP_INCLUDE_DIRS "matplotlibcpp.h")
 
 
 # MPI check
@@ -51,7 +53,6 @@ set(INCLUDE_DIR "${PROJECT_ROOT}/include")
 set(CUDA_DIR    "${PROJECT_ROOT}/src")
 set(SRC_DIR     "${PROJECT_ROOT}/src")
 set(TESTS_DIR   "${PROJECT_ROOT}/tests")
-set(MATPLOTLIB_CPP_DIR "${PROJECT_ROOT}/external/matplotlib-cpp")
 
 # ---- sources ----
 file(GLOB_RECURSE PROJECT_HEADERS "${INCLUDE_DIR}/*.hpp")
@@ -109,7 +110,7 @@ target_include_directories(md_particle_lib
     PUBLIC
         "${PROJECT_ROOT}"
         "${INCLUDE_DIR}"
-        "${MATPLOTLIB_CPP_DIR}"
+        "${MATPLOTLIB_CPP_INCLUDE_DIRS}"
         ${Python3_INCLUDE_DIRS}
         ${PYTHON_NUMPY_INCLUDE_DIR}
         ${OMPI_CUDA_INCLUDE}
@@ -147,7 +148,7 @@ foreach(test_src IN LISTS TEST_SOURCES)
         PRIVATE
             "${PROJECT_ROOT}"
             "${INCLUDE_DIR}"
-            "${MATPLOTLIB_CPP_DIR}"
+            "${MATPLOTLIB_CPP_INCLUDE_DIRS}"
             ${Python3_INCLUDE_DIRS}
             ${PYTHON_NUMPY_INCLUDE_DIR}
             ${MPI_ALL_INCLUDES}
