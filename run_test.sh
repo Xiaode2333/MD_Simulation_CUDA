@@ -3,7 +3,7 @@
 #SBATCH --partition=pi_co54
 #SBATCH --time=01:00:00
 #SBATCH --ntasks=4
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=32G
 
