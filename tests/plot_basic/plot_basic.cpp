@@ -5,7 +5,7 @@
  -I$(python -c "import numpy; \
  print(numpy.get_include())") -fPIC
 
-#include "../../external/matplotlib-cpp/matplotlibcpp.h"
+#include "matplotlibcpp.h"
 #include <cmath>
 #include <vector>
 

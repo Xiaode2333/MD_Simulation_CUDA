@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "md-simulation-cuda"
+version = "0.1.0"
+description = ""
+authors = ["Baichuan He <baichuan.he@yale.edu>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">3.12,<3.13"
+numpy = "^2.3.5"
+matplotlib = "^3.10.7"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
