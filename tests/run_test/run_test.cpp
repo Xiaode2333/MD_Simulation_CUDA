@@ -94,18 +94,18 @@ int main(){
                 fmt::print("[Step] {}. Frame saved at {}.\n", step, frame_path);
             }
 
-            // int n_bins_per_rank = 16;
-            // std::vector<double> density_profile = sim.get_density_profile(n_bins_per_rank);
+            int n_bins_per_rank = 16;
+            std::vector<double> density_profile = sim.get_density_profile(n_bins_per_rank);
 
-            // const int total_bins = n_bins_per_rank * cfg_mgr.config.rank_size;
-            // std::vector<double> density_A(density_profile.begin(),
-            //                             density_profile.begin() + total_bins);
-            // std::vector<double> density_B(density_profile.begin() + total_bins,
-            //                             density_profile.end());
+            const int total_bins = n_bins_per_rank * cfg_mgr.config.rank_size;
+            std::vector<double> density_A(density_profile.begin(),
+                                        density_profile.begin() + total_bins);
+            std::vector<double> density_B(density_profile.begin() + total_bins,
+                                        density_profile.end());
 
-            // if (cfg_mgr.config.rank_idx == 0){
-            //     fmt::print("[Step] {}. density profile: N_A: {}\n N_B: {}.\n", step, density_A, density_B);
-            // }
+            if (cfg_mgr.config.rank_idx == 0){
+                fmt::print("[Step] {}. density profile: N_A: {}\n N_B: {}.\n", step, density_A, density_B);
+            }
             // MPI_Barrier(MPI_COMM_WORLD);
         }
 

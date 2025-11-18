@@ -1,24 +1,14 @@
 {
+    "version": 4,
     "configurations": [
         {
             "name": "Linux",
-            "includePath": [
-                "${workspaceFolder}**",
-                "${workspaceFolder}/include",
-                "${workspaceFolder}/src",
-                "${workspaceFolder}/build/vcpkg_installed/x64-linux/include",
-                "${workspaceFolder}/vcpkg_installed/x64-linux/include",
-                "/apps/software/2024a/software/OpenMPI/5.0.3-NVHPC-25.1-CUDA-12.6.0/include",
-                "/apps/software/2024a/software/NVHPC/25.1-CUDA-12.6.0/Linux_x86_64/25.1/compilers/include"
-            ],
-            "defines": [],
             "compilerPath": "/apps/software/2024a/software/OpenMPI/5.0.3-NVHPC-25.1-CUDA-12.6.0/bin/mpicxx",
             "cStandard": "c17",
             "cppStandard": "gnu++17",
             "intelliSenseMode": "linux-gcc-x64",
-            "configurationProvider": "ms-vscode.cmake-tools",
-            "mergeConfigurations": true
+
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json"
         }
-    ],
-    "version": 4
+    ]
 }
