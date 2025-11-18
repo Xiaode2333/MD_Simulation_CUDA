@@ -8,6 +8,7 @@
 #include <random>
 #include <fmt/core.h>
 #include <string>
+#include <filesystem>
 
 #include "../../include/md_particle.hpp"   // contains Particle + print_particles
 
@@ -41,12 +42,28 @@ int main() {
     }
 
     const std::string out_png = "tests/plot_particles/particles.png";
+    const std::string tmp_dir = "./tmp";
+    const std::string csv_path = tmp_dir + "/particles.csv";
+
+    std::error_code ec;
+    std::filesystem::create_directories(tmp_dir, ec);
+    if (ec) {
+        fmt::print(stderr, "Failed to create {}: {}\n", tmp_dir, ec.message());
+        return 1;
+    }
 
     // Example sigma values; adjust if you want different size ratio
     double sigma_aa = 1.0;
     double sigma_bb = 1.0;
 
-    print_particles(particles, out_png, box_w, box_h, sigma_aa, sigma_bb);
+    plot_particles_python(
+        particles,
+        out_png,
+        csv_path,
+        box_w,
+        box_h,
+        sigma_aa,
+        sigma_bb);
 
     fmt::print("Saved {} particles plot to: {}\n", N, out_png);
     return 0;

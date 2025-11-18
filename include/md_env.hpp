@@ -25,13 +25,13 @@ class MDSimulation {
 
         void save_env();
         static MDSimulation load_env();
-        void plot_particles(const std::string& filename);//Assume particles are prepared in h_particles on rank 0
+        void plot_particles(const std::string& filename, const std::string& csv_path);//Assume particles are prepared in h_particles on rank 0
         double cal_total_K();
         double cal_total_U();
         void step_single_NVE();// step single timestep, including subdomain exchanges and halo update, but not collect to host. Assume acc updated, and update acc again after finish.
         void step_single_nose_hoover();
         void sample_collect();// before sampling or plot collect all particles to h_particles on rank 0
-        void triangulation_plot(bool is_plot, const std::string& filename);//do sample_collect() first. 
+        void triangulation_plot(bool is_plot, const std::string& filename, const std::string csv_path);//do sample_collect() first. 
         std::vector<double> get_density_profile(int n_bins_per_rank); //first half NA, second half NB, with total len n_bins_per_rank*rank_size
     private:
         MDConfigManager cfg_manager;

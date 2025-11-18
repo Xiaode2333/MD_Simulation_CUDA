@@ -1,156 +1,245 @@
 #include "md_particle.hpp"
 
+#include <array>
+#include <delaunator-header-only.hpp>
 
-void print_particles(const std::vector<Particle>& particles,
-                     const std::string& filename,
-                     double box_w, 
-                     double box_h, 
-                     double sigma_aa,
-                     double sigma_bb) 
-{
-    namespace plt = matplotlibcpp;
+namespace {
+struct Extents {
+    double min_x = 0.0;
+    double max_x = 0.0;
+    double min_y = 0.0;
+    double max_y = 0.0;
+};
 
+Extents compute_extents(const std::vector<Particle>& particles) {
+    Extents e;
     if (particles.empty()) {
-        return;
+        return e;
     }
 
-    // ----------------------------
-    // 1) Determine box if needed
-    // ----------------------------
-    double min_x = std::numeric_limits<double>::max();
-    double max_x = -std::numeric_limits<double>::max();
-    double min_y = std::numeric_limits<double>::max();
-    double max_y = -std::numeric_limits<double>::max();
+    e.min_x = e.max_x = particles.front().pos.x;
+    e.min_y = e.max_y = particles.front().pos.y;
 
     for (const auto& p : particles) {
-        if (p.pos.x < min_x) min_x = p.pos.x;
-        if (p.pos.x > max_x) max_x = p.pos.x;
-        if (p.pos.y < min_y) min_y = p.pos.y;
-        if (p.pos.y > max_y) max_y = p.pos.y;
+        if (p.pos.x < e.min_x) e.min_x = p.pos.x;
+        if (p.pos.x > e.max_x) e.max_x = p.pos.x;
+        if (p.pos.y < e.min_y) e.min_y = p.pos.y;
+        if (p.pos.y > e.max_y) e.max_y = p.pos.y;
     }
 
-    bool draw_box = false;
-    if (box_w <= 0.0 || box_h <= 0.0) {
-        box_w = max_x - min_x;
-        if (box_w <= 0.0) {
-            box_w = 1.0;
-        }
+    return e;
+}
+} // namespace
 
-        box_h = max_y - min_y;
-        if (box_h <= 0.0) {
-            box_h = 1.0;
+void print_particles_csv(const std::vector<Particle>& particles,
+                     const std::string& filename,
+                     double box_w,
+                     double box_h,
+                     double sigma_aa,
+                     double sigma_bb)
+{
+    const Extents ext = compute_extents(particles);
+
+    double resolved_box_w = box_w;
+    double resolved_box_h = box_h;
+    const bool draw_box_input = (box_w > 0.0 && box_h > 0.0);
+
+    if (resolved_box_w <= 0.0) {
+        resolved_box_w = particles.empty() ? 1.0 : (ext.max_x - ext.min_x);
+        if (resolved_box_w <= 0.0) {
+            resolved_box_w = 1.0;
         }
-    } else {
-        draw_box = true;
     }
 
-    const double x_left   = min_x;
-    const double x_right  = x_left + box_w;
-    const double y_bottom = min_y;
-    const double y_top    = y_bottom + box_h;
+    if (resolved_box_h <= 0.0) {
+        resolved_box_h = particles.empty() ? 1.0 : (ext.max_y - ext.min_y);
+        if (resolved_box_h <= 0.0) {
+            resolved_box_h = 1.0;
+        }
+    }
 
-    // ----------------------------
-    // 2) Group particles by type
-    //    type == 0 -> A (sigma_aa)
-    //    others    -> B (sigma_bb)
-    // ----------------------------
-    std::vector<double> xs_a, ys_a;
-    std::vector<double> xs_b, ys_b;
+    std::ofstream out(filename, std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("Failed to open particle CSV for writing: " + filename);
+    }
 
-    xs_a.reserve(particles.size());
-    ys_a.reserve(particles.size());
-    xs_b.reserve(particles.size());
-    ys_b.reserve(particles.size());
+    out.setf(std::ios::fixed, std::ios::floatfield);
+    out << std::setprecision(12);
+
+    out << "box_w," << resolved_box_w << ','
+        << "box_h," << resolved_box_h << ','
+        << "sigma_aa," << sigma_aa << ','
+        << "sigma_bb," << sigma_bb << ','
+        << "draw_box," << (draw_box_input ? 1 : 0) << ','
+        << "n_particles," << particles.size() << '\n';
 
     for (const auto& p : particles) {
-        if (p.type == 0) {
-            xs_a.push_back(p.pos.x);
-            ys_a.push_back(p.pos.y);
-        } else {
-            xs_b.push_back(p.pos.x);
-            ys_b.push_back(p.pos.y);
+        out << "x," << p.pos.x << ','
+            << "y," << p.pos.y << ','
+            << "type," << p.type << '\n';
+    }
+
+    if (!out) {
+        throw std::runtime_error("Failed to write particle CSV: " + filename);
+    }
+}
+
+void print_triangulation_csv(const std::vector<Particle>& particles,
+                             const delaunator::Delaunator& triangulation,
+                             const std::string& csv_name,
+                             double box_w,
+                             double box_h,
+                             double sigma_aa,
+                             double sigma_bb)
+{
+    if (csv_name.empty()) {
+        throw std::invalid_argument("print_triangulation_csv: csv_name must not be empty");
+    }
+
+    const Extents ext = compute_extents(particles);
+
+    double resolved_box_w = box_w;
+    double resolved_box_h = box_h;
+    const bool draw_box_input = (box_w > 0.0 && box_h > 0.0);
+
+    if (resolved_box_w <= 0.0) {
+        resolved_box_w = particles.empty() ? 1.0 : (ext.max_x - ext.min_x);
+        if (resolved_box_w <= 0.0) {
+            resolved_box_w = 1.0;
         }
     }
 
-    // ----------------------------
-    // 3) Fix figure size in pixels
-    //    and compute marker radii so that
-    //
-    //    2^(1/6)*sigma_aa / box_w = R_a_px / fig_w_px
-    //    2^(1/6)*sigma_bb / box_w = R_b_px / fig_w_px
-    //
-    //    Then convert desired radius in pixels -> scatter size s
-    //    using s [pt^2] ~ area of marker in points^2:
-    //    r_px = sqrt(s/pi) * dpi / 72
-    //    => s = pi * (r_px * 72 / dpi)^2
-    // ----------------------------
-    double fig_width_in = 10.0;
-    const double dpi    = 100.0;
-
-    // Optionally: scale figure width with box size so very large boxes
-    // get bigger images (you can tune these numbers)
-    const double L_ref = 50.0;     // "typical" box width in your units
-    if (box_w > L_ref) {
-        fig_width_in *= (box_w / L_ref);   // grow width with box_w
-        if (fig_width_in > 50.0) {
-            fig_width_in = 50.0;           // clamp to avoid huge files
+    if (resolved_box_h <= 0.0) {
+        resolved_box_h = particles.empty() ? 1.0 : (ext.max_y - ext.min_y);
+        if (resolved_box_h <= 0.0) {
+            resolved_box_h = 1.0;
         }
     }
 
-    // Convert inches → pixels for matplotlib-cpp
-    const int fig_w_px = static_cast<int>(fig_width_in * dpi);
-    int       fig_h_px = static_cast<int>(fig_width_in * (box_h / box_w) * dpi);
-    if (fig_h_px <= 0) {
-        fig_h_px = static_cast<int>(fig_width_in * dpi);
+    const auto in_base_box = [resolved_box_w, resolved_box_h](double x, double y) {
+        return (x >= 0.0 && x < resolved_box_w && y >= 0.0 && y < resolved_box_h);
+    };
+
+    std::vector<std::array<double, 6>> triangles;
+    triangles.reserve(triangulation.triangles.size() / 3);
+
+    for (std::size_t t = 0; t + 2 < triangulation.triangles.size(); t += 3) {
+        const std::size_t i0 = triangulation.triangles[t];
+        const std::size_t i1 = triangulation.triangles[t + 1];
+        const std::size_t i2 = triangulation.triangles[t + 2];
+
+        const double x0 = triangulation.coords[2 * i0];
+        const double y0 = triangulation.coords[2 * i0 + 1];
+        const double x1 = triangulation.coords[2 * i1];
+        const double y1 = triangulation.coords[2 * i1 + 1];
+        const double x2 = triangulation.coords[2 * i2];
+        const double y2 = triangulation.coords[2 * i2 + 1];
+
+        const bool inside0 = in_base_box(x0, y0);
+        const bool inside1 = in_base_box(x1, y1);
+        const bool inside2 = in_base_box(x2, y2);
+
+        if (!(inside0 || inside1 || inside2)) {
+            continue;
+        }
+
+        triangles.push_back({x0, y0, x1, y1, x2, y2});
     }
 
-    plt::figure_size(fig_w_px, fig_h_px);
-    // plt::figure();
-
-    // Marker sizes (same logic as before)
-    const double sigma_a = sigma_aa;
-    const double sigma_b = sigma_bb;
-
-    double radius_a_pts = (sigma_a * 1.12) * (fig_width_in / box_w) * 72.0;
-    double radius_b_pts = (sigma_b * 1.12) * (fig_width_in / box_w) * 72.0;
-
-    const double min_radius_pts = 1.0;
-    if (radius_a_pts < min_radius_pts) radius_a_pts = min_radius_pts;
-    if (radius_b_pts < min_radius_pts) radius_b_pts = min_radius_pts;
-
-    const double size_a = radius_a_pts * radius_a_pts;
-    const double size_b = radius_b_pts * radius_b_pts;
-
-    // ----------------------------
-    // 4) Plot
-    // ----------------------------
-    plt::xlim(x_left,  x_right);
-    plt::ylim(y_bottom, y_top);
-
-    if (!xs_a.empty()) {
-        plt::scatter(xs_a, ys_a, size_a,
-                    {{"facecolors", "red"},
-                    {"edgecolors", "black"},
-                    {"linewidths", "0.1"}});
-    }
-    if (!xs_b.empty()) {
-        plt::scatter(xs_b, ys_b, size_b,
-                    {{"facecolors", "blue"},
-                    {"edgecolors", "black"},
-                    {"linewidths", "0.1"}});
+    std::ofstream out(csv_name, std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("Failed to open triangulation CSV for writing: " + csv_name);
     }
 
-    if (draw_box) {
-        plt::plot({x_left, x_right, x_right, x_left, x_left},
-                {y_bottom, y_bottom, y_top, y_top, y_bottom},
-                {{"c", "black"}, {"linestyle", "--"}});
+    out.setf(std::ios::fixed, std::ios::floatfield);
+    out << std::setprecision(12);
+
+    out << "box_w," << resolved_box_w << ','
+        << "box_h," << resolved_box_h << ','
+        << "sigma_aa," << sigma_aa << ','
+        << "sigma_bb," << sigma_bb << ','
+        << "draw_box," << (draw_box_input ? 1 : 0) << ','
+        << "n_particles," << particles.size() << ','
+        << "n_triangles," << triangles.size() << '\n';
+
+    for (const auto& p : particles) {
+        out << "x," << p.pos.x << ','
+            << "y," << p.pos.y << ','
+            << "type," << p.type << '\n';
     }
 
-    plt::xlabel("x");
-    plt::ylabel("y");
-    plt::title("Particles");
-    plt::axis("equal");
+    for (const auto& tri : triangles) {
+        out << "x0," << tri[0] << ','
+            << "y0," << tri[1] << ','
+            << "x1," << tri[2] << ','
+            << "y1," << tri[3] << ','
+            << "x2," << tri[4] << ','
+            << "y2," << tri[5] << '\n';
+    }
 
-    plt::save(filename);
-    plt::close();
+    if (!out) {
+        throw std::runtime_error("Failed to write triangulation CSV: " + csv_name);
+    }
+}
+
+void plot_particles_python(const std::vector<Particle>& particles,
+                           const std::string& filename,
+                           const std::string& csv_path,
+                           const double box_w,
+                           const double box_h,
+                           const double sigma_aa,
+                           const double sigma_bb)
+{
+    if (filename.empty()) {
+        throw std::invalid_argument("plot_particles_python: filename must not be empty");
+    }
+
+    // const std::string csv_path = filename + ".csv";
+    print_particles_csv(particles, csv_path, box_w, box_h, sigma_aa, sigma_bb);
+
+    const std::string command =
+        "python ./python/plot_particle_python.py --filename \"" + filename +
+        "\" --csv_path \"" + csv_path + "\"";
+
+    const int status = std::system(command.c_str());
+    if (status != 0) {
+        throw std::runtime_error(
+            "plot_particle_python.py failed with status " + std::to_string(status));
+    }
+}
+
+void plot_triangulation_python(const std::vector<Particle>& particles,
+                               const delaunator::Delaunator& triangulation,
+                               const std::string& filename,
+                               const std::string& csv_path,
+                               const double box_w,
+                               const double box_h,
+                               const double sigma_aa,
+                               const double sigma_bb)
+{
+    if (filename.empty()) {
+        throw std::invalid_argument("plot_triangulation_python: filename must not be empty");
+    }
+    if (csv_path.empty()) {
+        throw std::invalid_argument("plot_triangulation_python: csv_path must not be empty");
+    }
+
+    print_triangulation_csv(
+        particles,
+        triangulation,
+        csv_path,
+        box_w,
+        box_h,
+        sigma_aa,
+        sigma_bb);
+
+    const std::string command =
+        "python ./python/plot_triangulation_python.py --csv_name \"" + csv_path +
+        "\" --output_name \"" + filename + "\"";
+
+    const int status = std::system(command.c_str());
+    if (status != 0) {
+        throw std::runtime_error(
+            "plot_triangulation_python.py failed with status " + std::to_string(status));
+    }
 }

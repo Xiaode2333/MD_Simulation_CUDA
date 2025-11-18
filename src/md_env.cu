@@ -157,16 +157,16 @@ void MDSimulation::allocate_memory(){
 
 
 
-static inline double pbc_wrap(double x, double L) {
-    if (L <= 0.0) {
-        return x;
-    }
-    x = std::fmod(x, L);
-    if (x < 0.0) {
-        x += L;
-    }
-    return x;
-}
+// static inline double pbc_wrap(double x, double L) {
+//     if (L <= 0.0) {
+//         return x;
+//     }
+//     x = std::fmod(x, L);
+//     if (x < 0.0) {
+//         x += L;
+//     }
+//     return x;
+// }
 
 void MDSimulation::distribute_particles_h2d() {
     const int rank_idx  = cfg_manager.config.rank_idx;
@@ -759,7 +759,7 @@ void MDSimulation::update_d_particles() { // use only d_particles to update part
 
     const int    n_cap  = cfg_manager.config.n_cap;
     int          n_local = cfg_manager.config.n_local;
-    const double Lx     = cfg_manager.config.box_w_global;
+    // const double Lx     = cfg_manager.config.box_w_global;
     const double x_min  = cfg_manager.config.x_min;
     const double x_max  = cfg_manager.config.x_max;
 
@@ -1200,14 +1200,15 @@ void MDSimulation::init_particles(){
     CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-void MDSimulation::plot_particles(const std::string& filename){
+void MDSimulation::plot_particles(const std::string& filename, const std::string& csv_path){
     if (cfg_manager.config.rank_idx != 0) return;
-    print_particles(h_particles,
-                        filename,
-                        cfg_manager.config.box_w_global,
-                        cfg_manager.config.box_h_global,
-                        cfg_manager.config.SIGMA_AA,
-                        cfg_manager.config.SIGMA_BB);
+    plot_particles_python(h_particles,
+                           filename,
+                           csv_path,
+                           cfg_manager.config.box_w_global,
+                            cfg_manager.config.box_h_global,
+                            cfg_manager.config.SIGMA_AA,
+                            cfg_manager.config.SIGMA_BB);
 }
 
 // update forces and store into d_particles
@@ -1539,18 +1540,14 @@ void _build_periodic_coords(
     }
 }
 
-void MDSimulation::triangulation_plot(bool is_plot, const std::string& filename)
+void MDSimulation::triangulation_plot(bool is_plot, const std::string& filename, const std::string csv_path)
 {
-    namespace plt = matplotlibcpp;
-
-    // only rank 0 does triangulation
-    if (cfg_manager.config.rank_idx != 0) {
+    if (cfg_manager.config.rank_idx != 0 || !is_plot) {
         return;
     }
 
     const double Lx = cfg_manager.config.box_w_global;
     const double Ly = cfg_manager.config.box_h_global;
-    const int    N  = cfg_manager.config.n_particles_global;
 
     _build_periodic_coords(
         h_particles,
@@ -1561,139 +1558,16 @@ void MDSimulation::triangulation_plot(bool is_plot, const std::string& filename)
 
     delaunator::Delaunator d(coords);
 
-    // helper lambda to test if a point is inside the base box
-    auto in_base_box = [Lx, Ly](double x, double y) -> bool {
-        return (x >= 0.0 && x < Lx && y >= 0.0 && y < Ly);
-    };
-
-    // prepare figure and particle groups using the same logic as print_particles
-    std::vector<double> xs_a, ys_a;
-    std::vector<double> xs_b, ys_b;
-
-    xs_a.reserve(N);
-    ys_a.reserve(N);
-    xs_b.reserve(N);
-    ys_b.reserve(N);
-
-    if (is_plot) {
-        // wrap positions into [0, Lx) × [0, Ly) and group by type
-        for (int i = 0; i < N; ++i) {
-            double x = h_particles[i].pos.x;
-            double y = h_particles[i].pos.y;
-
-            x -= std::floor(x / Lx) * Lx;
-            y -= std::floor(y / Ly) * Ly;
-
-            if (h_particles[i].type == 0) {
-                xs_a.push_back(x);
-                ys_a.push_back(y);
-            } else {
-                xs_b.push_back(x);
-                ys_b.push_back(y);
-            }
-        }
-
-        // same figure sizing logic as in print_particles
-        double box_w = Lx;
-        double box_h = Ly;
-
-        double fig_width_in = 10.0;
-        const double dpi    = 100.0;
-        const double L_ref  = 50.0;
-        if (box_w > L_ref) {
-            fig_width_in *= (box_w / L_ref);
-            if (fig_width_in > 20.0) {
-                fig_width_in = 20.0;
-            }
-        }
-
-        const int fig_w_px = static_cast<int>(fig_width_in * dpi);
-        int       fig_h_px = static_cast<int>(fig_width_in * (box_h / box_w) * dpi);
-        if (fig_h_px <= 0) {
-            fig_h_px = static_cast<int>(fig_width_in * dpi);
-        }
-
-        plt::figure_size(fig_w_px, fig_h_px);
-
-        // marker sizes similar to print_particles (adapt config names if needed)
-        const double sigma_aa = cfg_manager.config.SIGMA_AA;  // adjust to your config
-        const double sigma_bb = cfg_manager.config.SIGMA_BB;  // adjust to your config
-
-        double radius_a_pts = (sigma_aa * 0.5) * (fig_width_in / box_w) * 72.0;
-        double radius_b_pts = (sigma_bb * 0.5) * (fig_width_in / box_w) * 72.0;
-
-        const double min_radius_pts = 1.0;
-        if (radius_a_pts < min_radius_pts) radius_a_pts = min_radius_pts;
-        if (radius_b_pts < min_radius_pts) radius_b_pts = min_radius_pts;
-
-        const double size_a = radius_a_pts * radius_a_pts;
-        const double size_b = radius_b_pts * radius_b_pts;
-
-        // plt::xlim(0.0, Lx);
-        // plt::ylim(0.0, Ly);
-
-        if (!xs_a.empty()) {
-            plt::scatter(xs_a, ys_a, size_a,
-                         {{"facecolors", "red"},
-                          {"edgecolors", "black"},
-                          {"linewidths", "0.05"}});
-        }
-        if (!xs_b.empty()) {
-            plt::scatter(xs_b, ys_b, size_b,
-                         {{"facecolors", "blue"},
-                          {"edgecolors", "black"},
-                          {"linewidths", "0.05"}});
-        }
-    }
-
-    // Unchanged except for thin mesh lines: loop over triangles and draw mesh
-    for (std::size_t t = 0; t < d.triangles.size(); t += 3) {
-        const std::size_t i0 = d.triangles[t];
-        const std::size_t i1 = d.triangles[t + 1];
-        const std::size_t i2 = d.triangles[t + 2];
-
-        const double x0 = d.coords[2 * i0];
-        const double y0 = d.coords[2 * i0 + 1];
-        const double x1 = d.coords[2 * i1];
-        const double y1 = d.coords[2 * i1 + 1];
-        const double x2 = d.coords[2 * i2];
-        const double y2 = d.coords[2 * i2 + 1];
-
-        const bool inside0 = in_base_box(x0, y0);
-        const bool inside1 = in_base_box(x1, y1);
-        const bool inside2 = in_base_box(x2, y2);
-
-        // If all three vertices are outside, drop this triangle
-        if (!(inside0 || inside1 || inside2)) {
-            continue;
-        }
-
-        // draw triangle edges if plotting
-        if (is_plot) {
-            std::vector<double> tx{ x0, x1, x2, x0 };
-            std::vector<double> ty{ y0, y1, y2, y0 };
-            // thin mesh lines, similar scale to particle edge linewidths
-            plt::plot(tx, ty, {{"linewidth", "0.05"},
-                               {"color",     "black"}});
-        }
-    }
-
-    // finish plot as in print_particles
-    if (is_plot) {
-        plt::plot({0.0, Lx, Lx, 0.0, 0.0},
-                {0.0, 0.0, Ly, Ly, 0.0},
-                {{"c", "black"}, {"linestyle", "--"}});
-
-        plt::axis("equal");
-        plt::xlim(-Lx*0.05, Lx*(1+0.05));
-        plt::ylim(-Ly*0.05, Ly*(1+0.05));
-        plt::xlabel("x");
-        plt::ylabel("y");
-        plt::title("Triangulation mesh");
-        plt::tight_layout();
-        plt::save(filename);
-        plt::close();
-    }
+    // const std::string csv_path = filename + ".csv";
+    plot_triangulation_python(
+        h_particles,
+        d,
+        filename,
+        csv_path,
+        Lx,
+        Ly,
+        cfg_manager.config.SIGMA_AA,
+        cfg_manager.config.SIGMA_BB);
 }
 
 

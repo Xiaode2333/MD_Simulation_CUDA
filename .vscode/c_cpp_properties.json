@@ -3,18 +3,21 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/**",
-                "/home/bryson/miniconda3/envs/cuda_dev/include",
-                "/home/bryson/miniconda3/envs/cuda_dev/include/python2.7",
-                "/home/bryson/miniconda3/envs/cuda_dev/lib/python2.7/site-packages/numpy/core/include",
-                "/usr/include",
-                "/usr/lib/x86_64-linux-gnu/openmpi/include"
+                "${workspaceFolder}**",
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/build/vcpkg_installed/x64-linux/include",
+                "${workspaceFolder}/vcpkg_installed/x64-linux/include",
+                "/apps/software/2024a/software/OpenMPI/5.0.3-NVHPC-25.1-CUDA-12.6.0/include",
+                "/apps/software/2024a/software/NVHPC/25.1-CUDA-12.6.0/Linux_x86_64/25.1/compilers/include"
             ],
             "defines": [],
-            "compilerPath": "/usr/bin/gcc",
+            "compilerPath": "/apps/software/2024a/software/OpenMPI/5.0.3-NVHPC-25.1-CUDA-12.6.0/bin/mpicxx",
             "cStandard": "c17",
             "cppStandard": "gnu++17",
-            "intelliSenseMode": "linux-gcc-x64"
+            "intelliSenseMode": "linux-gcc-x64",
+            "configurationProvider": "ms-vscode.cmake-tools",
+            "mergeConfigurations": true
         }
     ],
     "version": 4

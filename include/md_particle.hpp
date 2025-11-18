@@ -1,12 +1,20 @@
 #pragma once
 
-#include "matplotlibcpp.h"
-
 #include <string>
 #include <vector>
 #include <limits>
 #include <cmath>
 #include <vector_types.h>
+#include <fmt/core.h>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <stdexcept>
+
+namespace delaunator {
+class Delaunator;
+}
 
 
 // #ifdef __CUDACC__
@@ -25,9 +33,34 @@ struct Particle {
     int type;
 };
 
-void print_particles(const std::vector<Particle>& particles,
-                            const std::string& filename,
-                            const double box_w   = 0.0,
-                            const double box_h   = 0.0,
-                            const double sigma_aa = 1.0,
-                            const double sigma_bb = 1.0);
+void print_particles_csv(const std::vector<Particle>& particles,
+                         const std::string& filename,
+                         const double box_w   = 0.0,
+                         const double box_h   = 0.0,
+                         const double sigma_aa = 1.0,
+                         const double sigma_bb = 1.0);
+
+void plot_particles_python(const std::vector<Particle>& particles,
+                           const std::string& filename,
+                           const std::string& csv_path,
+                           const double box_w,
+                           const double box_h,
+                           const double sigma_aa,
+                           const double sigma_bb);
+
+void print_triangulation_csv(const std::vector<Particle>& particles,
+                             const delaunator::Delaunator& triangulation,
+                             const std::string& csv_name,
+                             const double box_w   = 0.0,
+                             const double box_h   = 0.0,
+                             const double sigma_aa = 1.0,
+                             const double sigma_bb = 1.0);
+
+void plot_triangulation_python(const std::vector<Particle>& particles,
+                               const delaunator::Delaunator& triangulation,
+                               const std::string& filename,
+                               const std::string& csv_path,
+                               const double box_w,
+                               const double box_h,
+                               const double sigma_aa,
+                               const double sigma_bb);

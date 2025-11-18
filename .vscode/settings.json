@@ -5,6 +5,7 @@
         "-DVCPKG_MANIFEST_MODE=ON",
         "-DVCPKG_TARGET_TRIPLET=arm-neon-android"
     ],
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
     "files.associations": {
         "cctype": "cpp",
         "clocale": "cpp",

@@ -1,4 +1,5 @@
 #include "md_env.hpp"
+#include <filesystem>
 
 int main(){
     MPI_Init(nullptr, nullptr);
@@ -49,44 +50,52 @@ int main(){
         n_particles_type0,
         box_w_global,
         box_h_global,
-        T_init = 0.5, 
-        T_target = 1.0,
-        SIGMA_AA = 1.0, 
-        SIGMA_BB = 1.0, 
-        SIGMA_AB = 1.0,
-        EPSILON_AA = 1.0, 
-        EPSILON_BB = 1.0, 
-        EPSILON_AB = 0.25,
-        MASS_A = 1.0,
-        MASS_B = 1.0,
-        devide_p = 0.5,
-        dt = 1e-3,
-        Q = 100.0,
-        save_dt_interval = 0.1,
-        cutoff = 2.5,
-        run_name = "test",
-        load_name = "", // if needed to load from file
-        THREADS_PER_BLOCK = 256,
-        rank_size = world_size,
+        T_init, 
+        T_target,
+        SIGMA_AA, 
+        SIGMA_BB, 
+        SIGMA_AB,
+        EPSILON_AA, 
+        EPSILON_BB, 
+        EPSILON_AB,
+        MASS_A,
+        MASS_B,
+        devide_p,
+        dt,
+        Q,
+        save_dt_interval,
+        cutoff,
+        run_name,
+        load_name, // if needed to load from file
+        THREADS_PER_BLOCK,
+        rank_size,
 
-        rank_idx = 0,
-        n_local = 0,
-        n_halo_left = 0,
-        n_halo_right = 0,
-        n_cap = static_cast<int>(n_particles_global/world_size*2), //buffer capacity
-        halo_left_cap = static_cast<int>(n_particles_global/world_size/2),
-        halo_right_cap = static_cast<int>(n_particles_global/world_size/2),
-        left_rank = (world_rank + world_size - 1) % world_size,
-        right_rank = (world_rank + 1) % world_size,
-        x_min = box_w_global/world_size*world_rank,
-        x_max = box_w_global/world_size*(world_rank + 1),
+        rank_idx,
+        n_local,
+        n_halo_left,
+        n_halo_right,
+        n_cap, //buffer capacity
+        halo_left_cap,
+        halo_right_cap,
+        left_rank,
+        right_rank,
+        x_min,
+        x_max,
     };
     MDConfigManager config_manager(cfg);
     config_manager.config_to_json("tests/env_plot/md_config.json");
     // MPI_Comm comm;
     MDSimulation sim(config_manager, MPI_COMM_WORLD);
     fmt::print("Particles initialized.");
-    sim.plot_particles("tests/env_plot/init_frame.svg");
+    const std::string tmp_dir = "./tmp";
+    std::error_code ec;
+    std::filesystem::create_directories(tmp_dir, ec);
+    if (ec) {
+        fmt::print(stderr, "Failed to create {}: {}\n", tmp_dir, ec.message());
+        return 1;
+    }
+    const std::string csv_path = tmp_dir + "/env_plot_init.csv";
+    sim.plot_particles("tests/env_plot/init_frame.svg", csv_path);
 
     return 0;
 }

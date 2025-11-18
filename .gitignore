@@ -1,6 +1,7 @@
 /results/
 *.out
 /build/
+/build-debug/
 !/build/vcpkg.json
 !/build/vcpkg-configuration.json
 /cmake-build-*/
@@ -31,3 +32,4 @@ __pycache__/
 *.svg
 *.pdf
 !/docs/figs/*.svg
+.out
