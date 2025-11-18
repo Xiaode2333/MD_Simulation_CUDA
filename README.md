@@ -138,7 +138,14 @@ Your repository may look similar to:
 
 This project relies on **vcpkg** for C++ dependency management and **Conda** for Python-based visualization/analysis tools. Follow these steps to set up the necessary environment components on a Slurm cluster.
 
-### 1. Install vcpkg
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/Xiaode2333/MD_Simulation_CUDA.git
+cd MD_Simulation_CUDA
+```
+
+### 2. Install vcpkg
 
 Clone the vcpkg repository to your home directory and run the bootstrap script so CMake can pick up the toolchain:
 
@@ -147,7 +154,7 @@ git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
 ~/vcpkg/bootstrap-vcpkg.sh
 ```
 
-### 2. Set up the Python environment
+### 3. Set up the Python environment
 
 Create a Conda environment named `py3` containing Python 3.12, NumPy, and Matplotlib (the plotting scripts depend on these packages):
 
@@ -156,7 +163,7 @@ module load miniconda     # or whichever Conda module your cluster provides
 conda create -n py3 python=3.12 numpy matplotlib -y
 ```
 
-### 3. Run the simulation
+### 4. Run the simulation
 
 Submit the provided Slurm script from the project root; it loads the required modules (CUDA, MPI, Conda), builds the project via CMake/vcpkg, and launches the test driver:
 
