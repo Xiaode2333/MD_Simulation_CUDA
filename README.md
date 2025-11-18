@@ -132,8 +132,7 @@ Your repository may look similar to:
 ├── vcpkg-configuration.json
 ├── vcpkg.json
 └── vscode_slurm.out
-
----
+```
 
 ## 🛠️ Installation & Usage (Slurm Environment)
 
