@@ -32,7 +32,8 @@ __pycache__/
 *.svg
 *.pdf
 !/docs/figs/*.svg
-.out
+*.out
 /python/__pycache__/
 *.csv
 /tmp/
+.vscode/

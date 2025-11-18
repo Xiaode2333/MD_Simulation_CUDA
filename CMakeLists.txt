@@ -1,26 +1,37 @@
-# cmake -B build -S .   -DCMAKE_TOOLCHAIN_FILE=/home/bryson/vcpkg/scripts/buildsystems/vcpkg.cmake   -DVCPKG_TARGET_TRIPLET=x64-linux   -DPython3_EXECUTABLE=/usr/bin/python3   -DCMAKE_C_COMPILER=mpicc   -DCMAKE_CXX_COMPILER=mpicxx
 cmake_minimum_required(VERSION 3.18)
 
 project(CUDA2_MD LANGUAGES C CXX CUDA)
 
-# ---- language setup ----
+# --------------------------------------------------------
+# FIX 1: Force older debug info format (Fixes 'as' error on cluster)
+# --------------------------------------------------------
+add_compile_options("-gdwarf-4")
+
+# ---- Language Standards ----
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER})
+set(GCC_LIB_PATH "/apps/software/2024a/software/GCCcore/13.3.0/lib64")
 
-# ---- core packages ----
-find_package(MPI REQUIRED COMPONENTS C CXX)
+
+
+add_link_options("-L${GCC_LIB_PATH}" "-Wl,-rpath,${GCC_LIB_PATH}")
+
+# ---- Core Packages ----
+find_package(CUDAToolkit REQUIRED)
+find_package(MPI REQUIRED)
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 
+# ---- Header-only Libs ----
 find_path(DELAUNATOR_CPP_INCLUDE_DIRS "delaunator-header-only.hpp")
 find_path(MATPLOTLIB_CPP_INCLUDE_DIRS "matplotlibcpp.h")
 
-
-# MPI check
+# ---- MPI / CUDA Helper ----
 if(DEFINED ENV{OMPI_CUDA_PREFIX})
     set(OMPI_CUDA_INCLUDE "$ENV{OMPI_CUDA_PREFIX}/include")
     message(STATUS "OMPI_CUDA_INCLUDE = ${OMPI_CUDA_INCLUDE}")
@@ -29,14 +40,52 @@ else()
     message(WARNING "OMPI_CUDA_PREFIX is not set; CUDA-aware MPI headers will not be added explicitly.")
 endif()
 
-# ---- NumPy / matplotlib checks ----
+# --------------------------------------------------------
+# FIX 2: Robust MPI Include Detection (Fixes 'mpi.h not found' in CUDA)
+# --------------------------------------------------------
+set(MPI_ALL_INCLUDES "")
+
+# Method A: Try Standard CMake Target properties
+if(TARGET MPI::MPI_CXX)
+    get_target_property(_mpi_inc MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES)
+    if(_mpi_inc)
+        list(APPEND MPI_ALL_INCLUDES ${_mpi_inc})
+    endif()
+endif()
+
+# Method B: Ask the compiler wrapper directly (Crucial for OpenMPI modules)
+if(NOT MPI_ALL_INCLUDES)
+    message(STATUS "CMake failed to detect MPI includes automatically. Querying mpicxx...")
+    execute_process(
+        COMMAND bash -c "mpicxx --showme:incdirs"
+        OUTPUT_VARIABLE MPI_RAW_INC_OUT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(MPI_RAW_INC_OUT)
+        string(REPLACE " " ";" MPI_RAW_INC_LIST "${MPI_RAW_INC_OUT}")
+        list(APPEND MPI_ALL_INCLUDES ${MPI_RAW_INC_LIST})
+        message(STATUS "Detected MPI Includes via mpicxx: ${MPI_ALL_INCLUDES}")
+    endif()
+endif()
+
+# Method C: Hardcoded Fallback (Based on your cluster logs)
+if(NOT MPI_ALL_INCLUDES)
+    message(WARNING "Using hardcoded MPI path as fallback.")
+    list(APPEND MPI_ALL_INCLUDES "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/include")
+endif()
+
+# Apply globally so headers are found
+include_directories(SYSTEM ${MPI_ALL_INCLUDES})
+
+# ---- Python Checks ----
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "-c" "import numpy, sys; sys.stdout.write(numpy.get_include())"
     OUTPUT_VARIABLE PYTHON_NUMPY_INCLUDE_DIR
     RESULT_VARIABLE NUMPY_STATUS
 )
 if(NOT NUMPY_STATUS EQUAL 0 OR PYTHON_NUMPY_INCLUDE_DIR STREQUAL "")
-    message(FATAL_ERROR "NumPy not found for Python: ${Python3_EXECUTABLE}. Please ensure python3-numpy is installed.")
+    message(FATAL_ERROR "NumPy not found for Python: ${Python3_EXECUTABLE}")
 endif()
 
 execute_process(
@@ -47,65 +96,26 @@ if(NOT MATPLOTLIB_IMPORT_RESULT EQUAL 0)
     message(FATAL_ERROR "Python3 matplotlib module not found for interpreter: ${Python3_EXECUTABLE}")
 endif()
 
-# ---- project directories ----
+# ---- Project Directories ----
 set(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(INCLUDE_DIR "${PROJECT_ROOT}/include")
 set(CUDA_DIR    "${PROJECT_ROOT}/src")
 set(SRC_DIR     "${PROJECT_ROOT}/src")
 set(TESTS_DIR   "${PROJECT_ROOT}/tests")
 
-# ---- sources ----
+# ---- Sources ----
 file(GLOB_RECURSE PROJECT_HEADERS "${INCLUDE_DIR}/*.hpp")
 file(GLOB_RECURSE PROJECT_SOURCES "${SRC_DIR}/*.cpp")
 file(GLOB_RECURSE PROJECT_CUDA    "${CUDA_DIR}/*.cu")
 
+# ---- Main Library ----
 add_library(md_particle_lib
     ${PROJECT_SOURCES}
     ${PROJECT_CUDA}
 )
 
-set_source_files_properties(
-    ${PROJECT_CUDA}
-    PROPERTIES
-        LANGUAGE CUDA
-)
+set_source_files_properties(${PROJECT_CUDA} PROPERTIES LANGUAGE CUDA)
 
-# ---- robust MPI include detection ----
-set(MPI_ALL_INCLUDES "")
-
-# 1) From imported target MPI::MPI_CXX (most reliable)
-if(TARGET MPI::MPI_CXX)
-    get_target_property(_mpi_cxx_inc MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES)
-    if(_mpi_cxx_inc)
-        list(APPEND MPI_ALL_INCLUDES ${_mpi_cxx_inc})
-    endif()
-endif()
-
-# 2) From classic variables (if CMake set them)
-if(MPI_CXX_INCLUDE_DIRS)
-    list(APPEND MPI_ALL_INCLUDES ${MPI_CXX_INCLUDE_DIRS})
-endif()
-if(MPI_C_INCLUDE_PATH)
-    list(APPEND MPI_ALL_INCLUDES ${MPI_C_INCLUDE_PATH})
-endif()
-if(MPI_INCLUDE_PATH)
-    list(APPEND MPI_ALL_INCLUDES ${MPI_INCLUDE_PATH})
-endif()
-
-list(REMOVE_DUPLICATES MPI_ALL_INCLUDES)
-
-message(STATUS "MPI_ALL_INCLUDES = ${MPI_ALL_INCLUDES}")
-
-# If still empty, you *can* hard-code as a last resort on this machine:
-# list(APPEND MPI_ALL_INCLUDES "/usr/lib/x86_64-linux-gnu/openmpi/include"
-#                              "/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi")
-
-# Apply globally so nvcc also sees them
-if(MPI_ALL_INCLUDES)
-    include_directories(SYSTEM ${MPI_ALL_INCLUDES})
-endif()
-
-# ---- includes / links for md_particle_lib ----
 target_include_directories(md_particle_lib
     PUBLIC
         "${PROJECT_ROOT}"
@@ -115,6 +125,8 @@ target_include_directories(md_particle_lib
         ${PYTHON_NUMPY_INCLUDE_DIR}
         ${OMPI_CUDA_INCLUDE}
         ${DELAUNATOR_CPP_INCLUDE_DIRS}
+        ${MPI_ALL_INCLUDES}  # <--- This is the fix for CUDA
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
 )
 
 target_link_libraries(md_particle_lib
@@ -126,7 +138,7 @@ target_link_libraries(md_particle_lib
         ZLIB::ZLIB
 )
 
-# ---- tests ----
+# ---- Tests ----
 file(GLOB_RECURSE TEST_SOURCES "${TESTS_DIR}/*/*.cpp")
 
 foreach(test_src IN LISTS TEST_SOURCES)
@@ -152,5 +164,6 @@ foreach(test_src IN LISTS TEST_SOURCES)
             ${Python3_INCLUDE_DIRS}
             ${PYTHON_NUMPY_INCLUDE_DIR}
             ${MPI_ALL_INCLUDES}
+            ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
     )
 endforeach()

@@ -15,7 +15,7 @@ module --force purge
 module load StdEnv
 module load GCCcore/13.3.0
 module load CUDA/12.6.0
-module load OpenMPI/5.0.3-NVHPC-25.1-CUDA-12.6.0
+module load OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0
 module load UCX-CUDA/1.16.0-GCCcore-13.3.0-CUDA-12.6.0
 module load NCCL/2.22.3-GCCcore-13.3.0-CUDA-12.6.0
 module load UCC-CUDA/1.3.0-GCCcore-13.3.0-CUDA-12.6.0
@@ -55,7 +55,7 @@ cmake -B build -S . \
     -DCMAKE_C_COMPILER=mpicc \
     -DCMAKE_CXX_COMPILER=mpicxx \
     -DPython3_EXECUTABLE="$PY_EXEC" \
-    -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-NVHPC-25.1-CUDA-12.6.0" \
+    -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build build -j
 

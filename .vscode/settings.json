@@ -1,102 +1,37 @@
 {
-    "cmake.configureArgs": [
-        "-DVCPKG_APPLOCAL_DEPS=ON",
-        "-DX_VCPKG_APPLOCAL_DEPS_INSTALL=ON",
-        "-DVCPKG_MANIFEST_MODE=ON",
-        "-DVCPKG_TARGET_TRIPLET=arm-neon-android"
-    ],
-    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
-    "files.associations": {
-        "cctype": "cpp",
-        "clocale": "cpp",
-        "compare": "cpp",
-        "cstdarg": "cpp",
-        "cstddef": "cpp",
-        "cstdint": "cpp",
-        "cstdio": "cpp",
-        "cstdlib": "cpp",
-        "ctime": "cpp",
-        "cwchar": "cpp",
-        "cwctype": "cpp",
-        "exception": "cpp",
-        "memory_resource": "cpp",
-        "random": "cpp",
-        "utility": "cpp",
-        "initializer_list": "cpp",
-        "new": "cpp",
-        "typeinfo": "cpp",
-        "__nullptr": "cpp",
-        "optional": "cpp",
-        "stdexcept": "cpp",
-        "type_traits": "cpp",
-        "string": "cpp",
-        "codecvt": "cpp",
-        "complex": "cpp",
-        "unordered_set": "cpp",
-        "fstream": "cpp",
-        "iomanip": "cpp",
-        "sstream": "cpp",
-        "iostream": "cpp",
-        "vector": "cpp",
-        "any": "cpp",
-        "forward_list": "cpp",
-        "ranges": "cpp",
-        "cinttypes": "cpp",
-        "valarray": "cpp",
-        "ostream": "cpp",
-        "iosfwd": "cpp",
-        "limits": "cpp",
-        "cmath": "cpp",
-        "set": "cpp",
-        "shared_mutex": "cpp",
-        "cfenv": "cpp",
-        "algorithm": "cpp",
-        "cstring": "cpp",
-        "array": "cpp",
-        "atomic": "cpp",
-        "bit": "cpp",
-        "bitset": "cpp",
-        "charconv": "cpp",
-        "chrono": "cpp",
-        "concepts": "cpp",
-        "condition_variable": "cpp",
-        "deque": "cpp",
-        "map": "cpp",
-        "unordered_map": "cpp",
-        "expected": "cpp",
-        "functional": "cpp",
-        "iterator": "cpp",
-        "memory": "cpp",
-        "numeric": "cpp",
-        "ratio": "cpp",
-        "source_location": "cpp",
-        "string_view": "cpp",
-        "system_error": "cpp",
-        "tuple": "cpp",
-        "istream": "cpp",
-        "mutex": "cpp",
-        "numbers": "cpp",
-        "semaphore": "cpp",
-        "span": "cpp",
-        "stop_token": "cpp",
-        "streambuf": "cpp",
-        "thread": "cpp",
-        "variant": "cpp",
-        "format": "cpp",
-        "__bit_reference": "cpp",
-        "__hash_table": "cpp",
-        "__split_buffer": "cpp",
-        "__tree": "cpp",
-        "filesystem": "cpp"
+    "cmake.cmakePath": "/apps/software/2024a/software/CMake/3.29.3-GCCcore-13.3.0/bin/cmake",
+    
+    // Environment variables (This fixes the GCC 8.5.0 issue)
+    "cmake.environment": {
+        "OMPI_CC": "/apps/software/2024a/software/GCCcore/13.3.0/bin/gcc",
+        "OMPI_CXX": "/apps/software/2024a/software/GCCcore/13.3.0/bin/g++",
+        "PATH": "/apps/software/2024a/software/binutils/2.42-GCCcore-13.3.0/bin:${env:PATH}",
+        "LIBRARY_PATH": "/apps/software/2024a/software/libarchive/3.7.4-GCCcore-13.3.0/lib:/apps/software/2024a/software/bzip2/1.0.8-GCCcore-13.3.0/lib:/apps/software/2024a/software/Perl/5.38.2-GCCcore-13.3.0/lib:/apps/software/2024a/software/gettext/0.22.5-GCCcore-13.3.0/lib:/apps/software/2024a/software/libiconv/1.17-GCCcore-13.3.0/lib:/apps/software/2024a/software/ncurses/6.5-GCCcore-13.3.0/lib:/apps/software/2024a/software/expat/2.6.2-GCCcore-13.3.0/lib:/apps/software/2024a/software/cURL/8.7.1-GCCcore-13.3.0/lib:/apps/software/2024a/software/UCC-CUDA/1.3.0-GCCcore-13.3.0-CUDA-12.6.0/lib:/apps/software/2024a/software/NCCL/2.22.3-GCCcore-13.3.0-CUDA-12.6.0/lib:/apps/software/2024a/software/GDRCopy/2.3.1-GCCcore-13.3.0/lib:/apps/software/2024a/software/Check/0.15.2-GCCcore-13.3.0/lib:/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/lib:/apps/software/2024a/software/UCC/1.3.0-GCCcore-13.3.0/lib:/apps/software/2024a/software/PRRTE/3.0.5-GCCcore-13.3.0/lib:/apps/software/2024a/software/PMIx/5.0.2-GCCcore-13.3.0/lib:/apps/software/2024a/software/libfabric/1.21.0-GCCcore-13.3.0/lib:/apps/software/2024a/software/UCX/1.16.0-GCCcore-13.3.0/lib:/apps/software/2024a/software/libevent/2.1.12-GCCcore-13.3.0/lib:/apps/software/2024a/software/OpenSSL/3/lib64:/apps/software/2024a/software/hwloc/2.10.0-GCCcore-13.3.0/lib:/apps/software/2024a/software/libpciaccess/0.18.1-GCCcore-13.3.0/lib:/apps/software/2024a/software/libxml2/2.12.7-GCCcore-13.3.0/lib:/apps/software/2024a/software/XZ/5.4.5-GCCcore-13.3.0/lib:/apps/software/2024a/software/numactl/2.0.18-GCCcore-13.3.0/lib:/apps/software/2024a/software/binutils/2.42-GCCcore-13.3.0/lib:/apps/software/2024a/software/zlib/1.3.1-GCCcore-13.3.0/lib:/apps/software/2024a/software/CUDA/12.6.0/stubs/lib64:/apps/software/2024a/software/CUDA/12.6.0/nvvm/lib64:/apps/software/2024a/software/CUDA/12.6.0/extras/CUPTI/lib64:/apps/software/2024a/software/CUDA/12.6.0/targets/x86_64-linux/lib",
+        "LD_LIBRARY_PATH": "/apps/software/2024a/software/libarchive/3.7.4-GCCcore-13.3.0/lib:/apps/software/2024a/software/bzip2/1.0.8-GCCcore-13.3.0/lib:/apps/software/2024a/software/gettext/0.22.5-GCCcore-13.3.0/lib:/apps/software/2024a/software/libiconv/1.17-GCCcore-13.3.0/lib:/apps/software/2024a/software/ncurses/6.5-GCCcore-13.3.0/lib:/apps/software/2024a/software/expat/2.6.2-GCCcore-13.3.0/lib:/apps/software/2024a/software/cURL/8.7.1-GCCcore-13.3.0/lib:/apps/software/2024a/software/NCCL/2.22.3-GCCcore-13.3.0-CUDA-12.6.0/lib:/apps/software/2024a/software/GDRCopy/2.3.1-GCCcore-13.3.0/lib:/apps/software/2024a/software/Check/0.15.2-GCCcore-13.3.0/lib:/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/lib:/apps/software/2024a/software/UCC/1.3.0-GCCcore-13.3.0/lib:/apps/software/2024a/software/PRRTE/3.0.5-GCCcore-13.3.0/lib:/apps/software/2024a/software/PMIx/5.0.2-GCCcore-13.3.0/lib:/apps/software/2024a/software/libfabric/1.21.0-GCCcore-13.3.0/lib:/apps/software/2024a/software/UCX/1.16.0-GCCcore-13.3.0/lib:/apps/software/2024a/software/libevent/2.1.12-GCCcore-13.3.0/lib:/apps/software/2024a/software/OpenSSL/3/lib64:/apps/software/2024a/software/hwloc/2.10.0-GCCcore-13.3.0/lib:/apps/software/2024a/software/libpciaccess/0.18.1-GCCcore-13.3.0/lib:/apps/software/2024a/software/libxml2/2.12.7-GCCcore-13.3.0/lib:/apps/software/2024a/software/XZ/5.4.5-GCCcore-13.3.0/lib:/apps/software/2024a/software/numactl/2.0.18-GCCcore-13.3.0/lib:/apps/software/2024a/software/binutils/2.42-GCCcore-13.3.0/lib:/apps/software/2024a/software/zlib/1.3.1-GCCcore-13.3.0/lib:/apps/software/2024a/software/CUDA/12.6.0/nvvm/lib64:/apps/software/2024a/software/CUDA/12.6.0/extras/CUPTI/lib64:/apps/software/2024a/software/CUDA/12.6.0/targets/x86_64-linux/lib:/apps/software/2024a/software/GCCcore/13.3.0/lib64"
     },
-    "vcpkg.general.enable": true,
-    "vcpkg.target.hostTriplet": "x64-linux",
-    "vcpkg.target.defaultTriplet": "arm-neon-android",
-    "vcpkg.target.useStaticLib": false,
+
     "cmake.configureSettings": {
-        "CMAKE_TOOLCHAIN_FILE": "/home/bryson/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        
+        // CUDA
+        "CUDAToolkit_ROOT": "/apps/software/2024a/software/CUDA/12.6.0",
+        "CMAKE_CUDA_COMPILER": "/apps/software/2024a/software/CUDA/12.6.0/bin/nvcc",
+        "OMPI_CUDA_PREFIX": "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0",
+        
+        // MPI Wrappers
+        "CMAKE_C_COMPILER": "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/bin/mpicc",
+        "CMAKE_CXX_COMPILER": "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/bin/mpicxx",
+
+        // Python
+        "Python3_EXECUTABLE": "/home/bh692/.conda/envs/py3/bin/python",
+
+        // *** SEARCH PATHS (Conda + nlohmann_json) ***
+        // Note: Paths are separated by a semicolon ; inside the quotes
+        "CMAKE_PREFIX_PATH": "/home/bh692/.conda/envs/py3;/apps/software/2024a/software/nlohmann_json/3.11.3-GCCcore-13.3.0",
+
+        // VCPKG
+        "CMAKE_TOOLCHAIN_FILE": "/home/bh692/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-linux"
     },
-    "vcpkg.target.installDependencies": true,
-    "vcpkg.target.preferSystemLibs": false,
-    "vcpkg.target.useManifest": true
+    "cmake.generator": "Unix Makefiles"
 }
