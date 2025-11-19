@@ -1,7 +1,28 @@
 {
     "cmake.cmakePath": "/apps/software/2024a/software/CMake/3.29.3-GCCcore-13.3.0/bin/cmake",
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.codeAnalysis.runAutomatically": true,
+    "C_Cpp.codeAnalysis.clangTidy.enabled": false,
+    // Disable automatic workspace parsing (Tag Parser)
+    "C_Cpp.workspaceParsingPriority": "low",
+    // Only index files you actually open, not the whole world
+    "C_Cpp.intelliSense.lazy": true,
     
-    // Environment variables (This fixes the GCC 8.5.0 issue)
+
+    // Fix: Exclude build folders to stop infinite parsing loops
+    "files.exclude": {
+        "**/.git": true,
+        "**/.DS_Store": true,
+        "**/build": true,
+        "**/bin": true,
+        "**/*.o": true
+    },
+    "C_Cpp.files.exclude": {
+        "**/build": true,
+        "**/bin": true,
+        "**/.git": true
+    },
+
     "cmake.environment": {
         "OMPI_CC": "/apps/software/2024a/software/GCCcore/13.3.0/bin/gcc",
         "OMPI_CXX": "/apps/software/2024a/software/GCCcore/13.3.0/bin/g++",
@@ -12,26 +33,90 @@
 
     "cmake.configureSettings": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        
-        // CUDA
         "CUDAToolkit_ROOT": "/apps/software/2024a/software/CUDA/12.6.0",
         "CMAKE_CUDA_COMPILER": "/apps/software/2024a/software/CUDA/12.6.0/bin/nvcc",
         "OMPI_CUDA_PREFIX": "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0",
-        
-        // MPI Wrappers
         "CMAKE_C_COMPILER": "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/bin/mpicc",
         "CMAKE_CXX_COMPILER": "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/bin/mpicxx",
-
-        // Python
         "Python3_EXECUTABLE": "/home/bh692/.conda/envs/py3/bin/python",
-
-        // *** SEARCH PATHS (Conda + nlohmann_json) ***
-        // Note: Paths are separated by a semicolon ; inside the quotes
         "CMAKE_PREFIX_PATH": "/home/bh692/.conda/envs/py3;/apps/software/2024a/software/nlohmann_json/3.11.3-GCCcore-13.3.0",
-
-        // VCPKG
         "CMAKE_TOOLCHAIN_FILE": "/home/bh692/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-linux"
     },
-    "cmake.generator": "Unix Makefiles"
+    "cmake.generator": "Unix Makefiles",
+    
+    "files.associations": {
+        "any": "cpp",
+        "array": "cpp",
+        "atomic": "cpp",
+        "bit": "cpp",
+        "cctype": "cpp",
+        "clocale": "cpp",
+        "cmath": "cpp",
+        "codecvt": "cpp",
+        "compare": "cpp",
+        "concepts": "cpp",
+        "condition_variable": "cpp",
+        "cstdarg": "cpp",
+        "cstddef": "cpp",
+        "cstdint": "cpp",
+        "cstdio": "cpp",
+        "cstdlib": "cpp",
+        "cstring": "cpp",
+        "ctime": "cpp",
+        "cwchar": "cpp",
+        "cwctype": "cpp",
+        "deque": "cpp",
+        "forward_list": "cpp",
+        "map": "cpp",
+        "set": "cpp",
+        "unordered_map": "cpp",
+        "vector": "cpp",
+        "exception": "cpp",
+        "string_view": "cpp",
+        "fstream": "cpp",
+        "functional": "cpp",
+        "initializer_list": "cpp",
+        "iomanip": "cpp",
+        "iosfwd": "cpp",
+        "iostream": "cpp",
+        "istream": "cpp",
+        "limits": "cpp",
+        "memory": "cpp",
+        "mutex": "cpp",
+        "new": "cpp",
+        "numbers": "cpp",
+        "numeric": "cpp",
+        "optional": "cpp",
+        "ostream": "cpp",
+        "ranges": "cpp",
+        "ratio": "cpp",
+        "semaphore": "cpp",
+        "span": "cpp",
+        "sstream": "cpp",
+        "stdexcept": "cpp",
+        "stop_token": "cpp",
+        "streambuf": "cpp",
+        "string": "cpp",
+        "system_error": "cpp",
+        "thread": "cpp",
+        "type_traits": "cpp",
+        "tuple": "cpp",
+        "typeinfo": "cpp",
+        "utility": "cpp",
+        "valarray": "cpp",
+        "variant": "cpp",
+        "chrono": "cpp",
+        "complex": "cpp",
+        "unordered_set": "cpp",
+        "algorithm": "cpp",
+        "iterator": "cpp",
+        "memory_resource": "cpp",
+        "random": "cpp",
+        "cinttypes": "cpp",
+        "*.cu": "cpp",
+        "*.cuh": "cpp",
+        "charconv": "cpp",
+        "format": "cpp"
+    }
 }

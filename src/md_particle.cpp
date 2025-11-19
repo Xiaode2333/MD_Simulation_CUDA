@@ -243,3 +243,111 @@ void plot_triangulation_python(const std::vector<Particle>& particles,
             "plot_triangulation_python.py failed with status " + std::to_string(status));
     }
 }
+
+
+void print_interfaces_csv(const std::vector<Particle>& particles,
+                          const std::vector<std::vector<double>>& interfaces,
+                          const std::string& filename,
+                          double box_w,
+                          double box_h,
+                          double sigma_aa,
+                          double sigma_bb)
+{
+    // Compute extents if box dimensions are not provided
+    double min_x = particles.empty() ? 0.0 : particles[0].pos.x;
+    double max_x = min_x;
+    double min_y = particles.empty() ? 0.0 : particles[0].pos.y;
+    double max_y = min_y;
+
+    if (box_w <= 0.0 || box_h <= 0.0) {
+        for (const auto& p : particles) {
+            if (p.pos.x < min_x) min_x = p.pos.x;
+            if (p.pos.x > max_x) max_x = p.pos.x;
+            if (p.pos.y < min_y) min_y = p.pos.y;
+            if (p.pos.y > max_y) max_y = p.pos.y;
+        }
+    }
+
+    double resolved_box_w = (box_w > 0.0) ? box_w : (max_x - min_x);
+    double resolved_box_h = (box_h > 0.0) ? box_h : (max_y - min_y);
+    if (resolved_box_w <= 0.0) resolved_box_w = 1.0;
+    if (resolved_box_h <= 0.0) resolved_box_h = 1.0;
+    const bool draw_box = (box_w > 0.0 && box_h > 0.0);
+
+    std::ofstream out(filename, std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("Failed to open interfaces CSV for writing: " + filename);
+    }
+
+    out.setf(std::ios::fixed, std::ios::floatfield);
+    out << std::setprecision(12);
+
+    // Header line
+    out << "box_w," << resolved_box_w << ','
+        << "box_h," << resolved_box_h << ','
+        << "sigma_aa," << sigma_aa << ','
+        << "sigma_bb," << sigma_bb << ','
+        << "draw_box," << (draw_box ? 1 : 0) << ','
+        << "n_particles," << particles.size() << ','
+        << "n_interfaces," << interfaces.size();
+
+    // Add length of each interface (number of segments) to header
+    for (size_t i = 0; i < interfaces.size(); ++i) {
+        // interfaces[i] has [x1, y1, x2, y2, ...], so segments = size / 4
+        out << ",len_interface_" << i << "," << (interfaces[i].size() / 4);
+    }
+    out << '\n';
+
+    // Particle Data
+    for (const auto& p : particles) {
+        out << "x," << p.pos.x << ','
+            << "y," << p.pos.y << ','
+            << "type," << p.type << '\n';
+    }
+
+    // Interface Data
+    for (size_t i = 0; i < interfaces.size(); ++i) {
+        const auto& iface = interfaces[i];
+        for (size_t j = 0; j + 3 < iface.size(); j += 4) {
+            out << "iface_idx," << i << ','
+                << "x1," << iface[j] << ','
+                << "y1," << iface[j+1] << ','
+                << "x2," << iface[j+2] << ','
+                << "y2," << iface[j+3] << '\n';
+        }
+    }
+
+    if (!out) {
+        throw std::runtime_error("Failed to write interfaces CSV: " + filename);
+    }
+}
+
+
+void plot_interfaces_python(const std::vector<Particle>& particles,
+                            const std::vector<std::vector<double>>& interfaces,
+                            const std::string& filename,
+                            const std::string& csv_path,
+                            const double box_w,
+                            const double box_h,
+                            const double sigma_aa,
+                            const double sigma_bb)
+{
+    if (filename.empty()) {
+        throw std::invalid_argument("plot_interfaces_python: filename must not be empty");
+    }
+    if (csv_path.empty()) {
+        throw std::invalid_argument("plot_interfaces_python: csv_path must not be empty");
+    }
+
+    print_interfaces_csv(particles, interfaces, csv_path, box_w, box_h, sigma_aa, sigma_bb);
+
+    const std::string command =
+        "python ./python/plot_interface_python.py --filename \"" + filename +
+        "\" --csv_path \"" + csv_path + "\"";
+
+    const int status = std::system(command.c_str());
+    if (status != 0) {
+        throw std::runtime_error(
+            "plot_interface_python.py failed with status " + std::to_string(status));
+    }
+}

@@ -1,4 +1,6 @@
 {
+  "name": "md-simulation-cuda",
+  "version-string": "0.1.0",
   "dependencies": [
     "fmt",
     "matplotlib-cpp",

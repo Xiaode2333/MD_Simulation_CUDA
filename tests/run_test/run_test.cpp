@@ -1,17 +1,33 @@
 #include "md_env.hpp"
 #include <fmt/ranges.h>
+#include <filesystem>
+#include <cstdio>
+
+template <typename... Args>
+void RankZeroPrint(int rank_idx, fmt::format_string<Args...> format_str, Args&&... args) {
+    if (rank_idx == 0) {
+        fmt::print(format_str, std::forward<Args>(args)...);
+        std::fflush(stdout);
+    }
+}
+
+bool create_folder(const std::string& path, int rank_idx) {
+    if (rank_idx != 0) {
+        return true;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        std::filesystem::create_directories(path, ec);
+        if (ec) {
+            fmt::print(stderr, "Failed to create dir {}. Error: {}\n", path, ec.message());
+            return false;
+        }
+    }
+    return true;
+}
 
 int main(){
-    // The following configurations will be auto calculated in init
-    // "rank_idx": 0,
-    // "right_rank": 0,
-    // "left_rank": 0,
-    // "x_max": 0,
-    // "x_min": 0.0,
-    // "n_cap": 0,
-    // "halo_left_cap": 0,
-    // "halo_right_cap": 0
-
     const std::string cfg_path = "./tests/run_test/config.json";
     MDConfigManager cfg_mgr;
     cfg_mgr = cfg_mgr.config_from_json(cfg_path);
@@ -37,83 +53,51 @@ int main(){
     const int n_record_interval = static_cast<int>(cfg_mgr.config.save_dt_interval/cfg_mgr.config.dt);
 
     std::string frame_dir = "./tests/run_test/frames/";
-    std::error_code ec;
-    if (rank_idx == 0) {
-        if (!std::filesystem::exists(frame_dir, ec)) {
-            std::filesystem::create_directories(frame_dir, ec);
-            if (ec) {
-                fmt::print(stderr,
-                           "Failed to create dir {}. Error: {}\n",
-                           frame_dir, ec.message());
-                MPI_Abort(MPI_COMM_WORLD, 1);
-            }
-        }
-    }
-
+    std::string interface_dir = "./tests/run_test/interfaces/";
     std::string csv_dir = "./tests/run_test/csv/";
-    if (rank_idx == 0) {
-        if (!std::filesystem::exists(csv_dir, ec)) {
-            std::filesystem::create_directories(csv_dir, ec);
-            if (ec) {
-                fmt::print(stderr,
-                           "Failed to create dir {}. Error: {}\n",
-                           csv_dir, ec.message());
-                MPI_Abort(MPI_COMM_WORLD, 1);
-            }
-        }
-    }
 
-    // Make sure all ranks wait until rank 0 finishes creating the directory
+    if (!create_folder(frame_dir, rank_idx)) MPI_Abort(MPI_COMM_WORLD, 1);
+    if (!create_folder(interface_dir, rank_idx)) MPI_Abort(MPI_COMM_WORLD, 1);
+    if (!create_folder(csv_dir, rank_idx)) MPI_Abort(MPI_COMM_WORLD, 1);
+
+    RankZeroPrint(rank_idx, "[RANK] {} waiting for MPI_Barrier.\n", rank_idx);
     MPI_Barrier(MPI_COMM_WORLD);
-    
-    
-
-    // if (cfg_mgr.config.rank_idx == 0){
-    //     sim.plot_particles(frame_dir + fmt::format("frame_init.svg"));
-    // }
+    RankZeroPrint(rank_idx, "[RANK] {} complete for MPI_Barrier.\n", rank_idx);
     
     for (int step = 0; step < n_steps; step++){
-        // sim.sample_collect();
-        
-        
-        // MPI_Barrier(MPI_COMM_WORLD);
-        // sim.step_single_NVE();
         sim.step_single_nose_hoover();
 
         if (step % n_record_interval == 0) {
             std::string frame_path = frame_dir + fmt::format("frame_step_{}.svg", step);
-            std::string frame_triangulation_path = frame_dir + fmt::format("triangulation_frame_step_{}.svg", step);
             std::string csv_path = csv_dir + fmt::format("frame_step_{}.csv", step);
-            std::string csv_path_triangulation = csv_dir + fmt::format("triangulation_frame_step_{}.csv", step);
-            // before sampling or plot collect all particles to h_particles on rank 0
-            sim.sample_collect();
-            if (cfg_mgr.config.rank_idx == 0){
-                fmt::print("[Step] {}. Plotting frame.\n", step);
-                sim.plot_particles(frame_path, csv_path);
-                sim.triangulation_plot(true, frame_triangulation_path, csv_path_triangulation);
-                fmt::print("[Step] {}. Frame saved at {}.\n", step, frame_path);
-            }
 
+            std::string frame_triangulation_path = frame_dir + fmt::format("triangulation_frame_step_{}.svg", step);
+            std::string csv_path_triangulation = csv_dir + fmt::format("triangulation_frame_step_{}.csv", step);
+
+            std::string frame_interface_path = interface_dir + fmt::format("interface_step_{}.svg", step);
+            std::string csv_path_interface = csv_dir + fmt::format("interface_step_{}.csv", step);
+
+            sim.sample_collect();
+            
             int n_bins_per_rank = 16;
             std::vector<double> density_profile = sim.get_density_profile(n_bins_per_rank);
+            RankZeroPrint(rank_idx, "[Step] {}. Density Profile (rho): {}\n", step, density_profile);
 
-            const int total_bins = n_bins_per_rank * cfg_mgr.config.rank_size;
-            std::vector<double> density_A(density_profile.begin(),
-                                        density_profile.begin() + total_bins);
-            std::vector<double> density_B(density_profile.begin() + total_bins,
-                                        density_profile.end());
+            RankZeroPrint(rank_idx, "[Step] {}. plot_particles.\n", step);
+            sim.plot_particles(frame_path, csv_path);
+            
+            RankZeroPrint(rank_idx, "[Step] {}. triangulation_plot.\n", step);
+            sim.triangulation_plot(true, frame_triangulation_path, csv_path_triangulation, density_profile);
+            
+            RankZeroPrint(rank_idx, "[Step] {}. plot_interfaces.\n", step);
+            sim.plot_interfaces(frame_interface_path, csv_path_interface, density_profile);
 
-            if (cfg_mgr.config.rank_idx == 0){
-                fmt::print("[Step] {}. density profile: N_A: {}\n N_B: {}.\n", step, density_A, density_B);
-            }
-            // MPI_Barrier(MPI_COMM_WORLD);
+            RankZeroPrint(rank_idx, "[Step] {}. Frames saved.\n", step);
         }
 
-        if (cfg_mgr.config.rank_idx == 0){
-            fmt::print("[Step] {}.\n", step);
+        if (step % 100 == 0) {
+            RankZeroPrint(rank_idx, "[Step] {}.\n", step);
         }
-        
-
     }
     return 0;
 }

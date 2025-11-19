@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Dict, Tuple, Union
+from typing import Dict, List, Tuple, Union, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,6 +25,8 @@ def _parse_metadata_row(row: list[str]) -> Metadata:
         elif key == "draw_box":
             metadata[key] = bool(int(float(value)))
         elif key == "n_triangles":
+            metadata[key] = int(float(value))
+        elif key == "n_interfaces":
             metadata[key] = int(float(value))
         else:
             metadata[key] = float(value)
@@ -199,6 +201,68 @@ def load_triangulation_csv(
     return metadata, pos_array, type_array, tri_array
 
 
+def load_interface_csv(
+    path: Union[str, Path]
+) -> Tuple[Metadata, np.ndarray, np.ndarray, List[Dict[str, Any]]]:
+    """Load metadata, particles, and interface segments from an interface CSV."""
+
+    path = Path(path)
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        try:
+            metadata_row = next(reader)
+        except StopIteration as exc:
+            raise ValueError("Interface CSV is empty") from exc
+
+        metadata = _parse_metadata_row(metadata_row)
+        n_particles = int(metadata.get("n_particles", 0))
+
+        positions = []
+        ptypes = []
+        for idx in range(n_particles):
+            tokens = _next_tokens(reader)
+            if tokens is None:
+                raise ValueError(
+                    f"Unexpected end of file while reading particle rows (expected {n_particles})"
+                )
+            pos_x, pos_y, particle_type = _parse_particle_tokens(tokens)
+            positions.append((pos_x, pos_y))
+            ptypes.append(particle_type)
+
+        interfaces = []
+        while True:
+            tokens = _next_tokens(reader)
+            if tokens is None:
+                break
+            
+            # Format: iface_idx, I, x1, X1, y1, Y1, x2, X2, y2, Y2
+            if len(tokens) != 10 or tokens[0] != "iface_idx":
+                # Fallback or strict check; ignoring malformed lines for robustness or raising error
+                continue
+                
+            try:
+                seg = {
+                    'idx': int(tokens[1]),
+                    'x1': float(tokens[3]),
+                    'y1': float(tokens[5]),
+                    'x2': float(tokens[7]),
+                    'y2': float(tokens[9]),
+                }
+                interfaces.append(seg)
+            except ValueError:
+                continue
+
+    pos_array = np.array(positions, dtype=np.float64)
+    if pos_array.size == 0:
+        pos_array = np.zeros((0, 2), dtype=np.float64)
+
+    type_array = (
+        np.array(ptypes, dtype=np.int32) if ptypes else np.zeros((0,), dtype=np.int32)
+    )
+
+    return metadata, pos_array, type_array, interfaces
+
+
 def _setup_plot(
     metadata: Metadata,
     positions: np.ndarray,
@@ -354,9 +418,44 @@ def plot_triangulation_csv(
     plt.close(fig)
 
 
+def plot_interface_csv(
+    csv_path: Union[str, Path],
+    output_path: Union[str, Path],
+    *,
+    dpi: float = 100.0,
+    l_ref: float = 50.0,
+) -> None:
+    """Render interface scatter + segments from a CSV."""
+
+    metadata, positions, types, interfaces = load_interface_csv(csv_path)
+    fig, ax, fig_width_in, box_w, _, draw_box, bounds = _setup_plot(
+        metadata, positions, dpi, l_ref
+    )
+    _scatter_particles(ax, positions, types, metadata, fig_width_in, box_w)
+
+    for seg in interfaces:
+        ax.plot(
+            [seg['x1'], seg['x2']],
+            [seg['y1'], seg['y2']],
+            c="black",
+            linewidth=2.0,
+            alpha=1.0
+        )
+
+    ax.set_title("Interfaces")
+    _finalize_plot(ax, draw_box, bounds)
+    fig.tight_layout()
+
+    output_path = Path(output_path)
+    fig.savefig(output_path, dpi=dpi)
+    plt.close(fig)
+
+
 __all__ = [
     "load_particle_csv",
     "plot_particle_csv",
     "load_triangulation_csv",
     "plot_triangulation_csv",
+    "load_interface_csv",
+    "plot_interface_csv",
 ]

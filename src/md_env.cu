@@ -4,34 +4,62 @@
 #include "md_common.hpp"
 #include "md_cuda_common.hpp"
 
-MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm){
+
+#include <iostream>
+#include <numeric>
+#include <map>
+#include <set>
+
+MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm) {
     this->cfg_manager = config_manager;
     this->comm = comm;
     xi = 0.0;
 
-    // fmt::print("Starting broadcasting params.\n");
+    fmt::print("Starting broadcasting params.\n");
+    std::fflush(stdout); // FORCE FLUSH
+    
     broadcast_params();
-    // fmt::print("Params broadcasted.\n");
+    
+    fmt::print("Params broadcasted.\n");
+    std::fflush(stdout);
 
     allocate_memory();
-    fmt::print("[Rank] {}/{}. Memory allocated.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+    if (cfg_manager.config.rank_idx == 0) {
+        fmt::print("[Rank] {}/{}. Memory allocated.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+        std::fflush(stdout);
+    }
 
-    init_particles();//only in rank 0 host h_particles
+    init_particles(); // Only updates h_particles on Rank 0
 
-    //Distribute from host of rank 0 to other ranks' devices
-    fmt::print("[Rank] {}/{}. Distributing partilces.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+    // Distribute
+    if (cfg_manager.config.rank_idx == 0) {
+        fmt::print("[Rank] {}/{}. Distributing particles.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+        std::fflush(stdout);
+    }
+    
     distribute_particles_h2d(); 
-    fmt::print("[Rank] {}/{}. Update_halo.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+    
+    if (cfg_manager.config.rank_idx == 0) {
+        fmt::print("[Rank] {}/{}. Update_halo.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+        std::fflush(stdout);
+    }
     update_halo();
 
-    //Update forces for all ranks, and then collect to host on rank 0
-    fmt::print("[Rank] {}/{}. Updating forces.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+    // Forces
+    if (cfg_manager.config.rank_idx == 0) {
+        fmt::print("[Rank] {}/{}. Updating forces.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+        std::fflush(stdout);
+    }
+    
     cal_forces();
-    update_halo();//copy forces to halos
-    fmt::print("[Rank] {}/{}. Collecting particles.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
-    // collect_particles_d2h();
+    update_halo(); 
 
-    fmt::print("[Rank] {}/{}. MD simulation env initialized.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+    // collect_particles_d2h(); // Disabled in your snippet
+
+    if (cfg_manager.config.rank_idx == 0) {
+        fmt::print("[Rank] {}/{}. MD simulation env initialized.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+        std::fflush(stdout);
+    }
 }
 
 MDSimulation::~MDSimulation() = default;
@@ -42,70 +70,41 @@ void MDSimulation::broadcast_params() {
     MPI_Comm_rank(comm, &world_rank);
     MPI_Comm_size(comm, &world_size);
 
-    // rank 0 sanity and global-derived defaults
     if (world_rank == 0) {
-        // Check consistency of rank_size from config (if provided)
-        if (cfg_manager.config.rank_size != 0 &&
-            cfg_manager.config.rank_size != world_size) {
-            fmt::print(stderr,
-                       "[broadcast_params] config.rank_size={} != world_size={}.\n",
+        if (cfg_manager.config.rank_size != 0 && cfg_manager.config.rank_size != world_size) {
+            fmt::print(stderr, "[broadcast_params] Error: config.rank_size={} != world_size={}.\n",
                        cfg_manager.config.rank_size, world_size);
             MPI_Abort(comm, 1);
         }
         cfg_manager.config.rank_size = world_size;
 
-        // Basic sanity for global box and particle count
         if (cfg_manager.config.box_w_global <= 0.0) {
-            fmt::print(stderr,
-                       "[broadcast_params] box_w_global must be > 0, got {}.\n",
-                       cfg_manager.config.box_w_global);
-            MPI_Abort(comm, 1);
-        }
-        if (cfg_manager.config.n_particles_global <= 0) {
-            fmt::print(stderr,
-                       "[broadcast_params] n_particles_global must be > 0, got {}.\n",
-                       cfg_manager.config.n_particles_global);
+            fmt::print(stderr, "[broadcast_params] Error: box_w_global <= 0.\n");
             MPI_Abort(comm, 1);
         }
         
-        // If capacity not specified, choose a reasonable default per rank
+        // Auto-calculate n_cap if missing
         if (cfg_manager.config.n_cap <= 0) {
-            const double mean_per_rank =
-                static_cast<double>(cfg_manager.config.n_particles_global) /
-                static_cast<double>(world_size);
-            const int n_cap_default =
-                static_cast<int>(mean_per_rank * 2) + 128;
-            cfg_manager.config.n_cap = n_cap_default;
+            const double mean_per_rank = static_cast<double>(cfg_manager.config.n_particles_global) / world_size;
+            cfg_manager.config.n_cap = static_cast<int>(mean_per_rank * 2) + 128;
         }
 
-        const double sigma_max = std::max(cfg_manager.config.SIGMA_AA, std::max(cfg_manager.config.SIGMA_AB, cfg_manager.config.SIGMA_BB));
-        const double cutoff = cfg_manager.config.cutoff;
-        int halo_cap = static_cast<int>(sigma_max*cutoff*5/cfg_manager.config.box_w_global*cfg_manager.config.n_particles_global);
-        if (halo_cap < 128){
-            halo_cap = 128;
-        }
-        // If halo capacities not specified, set to a fraction of n_cap with a floor
-        if (cfg_manager.config.halo_left_cap <= 0) {
-            cfg_manager.config.halo_left_cap = halo_cap;
-        }
-        if (cfg_manager.config.halo_right_cap <= 0) {
-            cfg_manager.config.halo_right_cap = halo_cap;
-        }
+        // Auto-calculate halo cap
+        const double sigma_max = std::max({cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_AB, cfg_manager.config.SIGMA_BB});
+        int halo_cap = static_cast<int>(sigma_max * cfg_manager.config.cutoff * 5.0 / cfg_manager.config.box_w_global * cfg_manager.config.n_particles_global);
+        if (halo_cap < 128) halo_cap = 128;
 
-        // x_min, x_max, left_rank, right_rank are per-rank values
-        // they will be recomputed consistently on all ranks below,
-        // so the file values (if any) are ignored.
+        if (cfg_manager.config.halo_left_cap <= 0) cfg_manager.config.halo_left_cap = halo_cap;
+        if (cfg_manager.config.halo_right_cap <= 0) cfg_manager.config.halo_right_cap = halo_cap;
     }
 
-    // broadcast the whole config struct from rank 0
-    MPI_Bcast(&cfg_manager.config,
-              static_cast<int>(sizeof(MDConfig)),
-              MPI_BYTE,
-              0,
-              comm);
+    // WARNING: MDConfig contains std::string. MPI_Bcast on standard layout structs with strings 
+    // sends POINTERS, causing segfaults on receivers. 
+    // Ensure MDConfig uses char arrays (e.g. char run_name[64]) OR serialize this properly.
+    MPI_Bcast(&cfg_manager.config, static_cast<int>(sizeof(MDConfig)), MPI_BYTE, 0, comm);
 
-    // after broadcast, fix all rank-dependent fields locally
-    cfg_manager.config.rank_idx  = world_rank;
+    // Post-broadcast fixups
+    cfg_manager.config.rank_idx = world_rank;
     cfg_manager.config.rank_size = world_size;
 
     const double Lx = cfg_manager.config.box_w_global;
@@ -113,23 +112,12 @@ void MDSimulation::broadcast_params() {
 
     cfg_manager.config.x_min = dx * static_cast<double>(world_rank);
     cfg_manager.config.x_max = dx * static_cast<double>(world_rank + 1);
+    cfg_manager.config.left_rank = (world_rank + world_size - 1) % world_size;
+    cfg_manager.config.right_rank = (world_rank + 1) % world_size;
 
-    cfg_manager.config.left_rank  =
-        (world_rank + world_size - 1) % world_size;
-    cfg_manager.config.right_rank =
-        (world_rank + 1) % world_size;
-
-    // Optional: debug print
-    fmt::print("[broadcast_params] [Rank] {}/{}: x_min={:4.2f}, x_max={:4.2f}, left_rank={:1d}, right_rank={:1d}, n_cap={:4d}, haloL={:4d}, haloR={:4d}\n",
-               world_rank,
-               world_size,
-               cfg_manager.config.x_min,
-               cfg_manager.config.x_max,
-               cfg_manager.config.left_rank,
-               cfg_manager.config.right_rank,
-               cfg_manager.config.n_cap,
-               cfg_manager.config.halo_left_cap,
-               cfg_manager.config.halo_right_cap);
+    // Optional debug
+    fmt::print("[broadcast_params] Rank {}\n", world_rank);
+    std::fflush(stdout);
 }
 
 void MDSimulation::allocate_memory(){
@@ -1081,6 +1069,7 @@ void MDSimulation::init_particles(){
         double mass_type0          = cfg_manager.config.MASS_A;
         double mass_type1          = cfg_manager.config.MASS_B;
         std::mt19937 rng(12345);
+        std::uniform_real_distribution<double> pos_perturb(-1.0e-5, 1.0e-5);
 
         // initial spacing estimates from area / N
         double spacing_type0 = std::sqrt(unshifted_x_devide * box_h / n_particles_type0);
@@ -1134,8 +1123,8 @@ void MDSimulation::init_particles(){
 
                 double x = std::fmod(x_local + shift_dx + box_w, box_w);
 
-                h_particles[idx].pos.x = x;
-                h_particles[idx].pos.y = y;
+                h_particles[idx].pos.x = x + pos_perturb(rng);
+                h_particles[idx].pos.y = y + pos_perturb(rng);
                 h_particles[idx].type  = 0;
             }
         }
@@ -1154,8 +1143,8 @@ void MDSimulation::init_particles(){
 
                 double x = std::fmod(x_local + shift_dx + box_w, box_w);
 
-                h_particles[idx].pos.x = x;
-                h_particles[idx].pos.y = y;
+                h_particles[idx].pos.x = x + pos_perturb(rng);
+                h_particles[idx].pos.y = y + pos_perturb(rng);
                 h_particles[idx].type  = 1;
             }
         }
@@ -1504,25 +1493,36 @@ void MDSimulation::sample_collect(){
     CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-void _build_periodic_coords(
+void _build_interface_coords(
     const std::vector<Particle> &h_particles,
     double Lx,
     double Ly,
-    std::vector<double> &coords
+    const std::vector<double>& interfaces,
+    double width_x,
+    double width_y,
+    std::vector<double> &coords,
+    std::vector<int> &vertex_to_idx
 ) {
     const int N = static_cast<int>(h_particles.size());
-    if (N <= 0) {
-        coords.clear();
+    coords.clear();
+    vertex_to_idx.clear();
+
+    if (N <= 0 || interfaces.empty()) {
         return;
     }
 
-    // We know the exact size: N particles × 9 images × 2 coordinates
-    const std::size_t total_vals = static_cast<std::size_t>(N) * 9u * 2u;
-    coords.resize(total_vals);   // size set, capacity reused if enough
+    coords.reserve(static_cast<size_t>(N * 4)); 
+    vertex_to_idx.reserve(static_cast<size_t>(N * 2));
 
-    double *out = coords.data(); // raw pointer for sequential writes
+    const double half_wx = width_x * 0.5;
 
-    // Precompute shifts for periodic images: {-Lx, 0, Lx}, {-Ly, 0, Ly}
+    // Define the padded box limits
+    const double x_min_limit = -width_x;
+    const double x_max_limit = Lx + width_x;
+    const double y_min_limit = -width_y;
+    const double y_max_limit = Ly + width_y;
+
+    // Precompute shifts
     const double shift_x[3] = { -Lx, 0.0, Lx };
     const double shift_y[3] = { -Ly, 0.0, Ly };
 
@@ -1530,48 +1530,134 @@ void _build_periodic_coords(
         const double x0 = h_particles[i].pos.x;
         const double y0 = h_particles[i].pos.y;
 
+        // 1. Filtering: Is this particle relevant (close to an interface)?
+        bool keep = false;
+        for (double int_x : interfaces) {
+            double dx = x0 - int_x;
+            // Minimum image convention for distance check
+            while (dx > Lx * 0.5)  dx -= Lx;
+            while (dx < -Lx * 0.5) dx += Lx;
+
+            // Use half_wx for filtering "core" particles
+            if (std::abs(dx) <= half_wx) {
+                keep = true;
+                break; 
+            }
+        }
+
+        if (!keep) continue;
+
+        // 2. Generation: Add all periodic images that fall within the padded box
         for (int ix = 0; ix < 3; ++ix) {
-            const double x = x0 + shift_x[ix];
+            double nx = x0 + shift_x[ix];
+            
+            // Check X bounds
+            if (nx < x_min_limit || nx > x_max_limit) continue;
+
             for (int iy = 0; iy < 3; ++iy) {
-                *out++ = x;
-                *out++ = y0 + shift_y[iy];
+                double ny = y0 + shift_y[iy];
+
+                // Check Y bounds
+                if (ny >= y_min_limit && ny <= y_max_limit) {
+                    coords.push_back(nx);
+                    coords.push_back(ny);
+                    vertex_to_idx.push_back(i);
+                }
             }
         }
     }
 }
 
-void MDSimulation::triangulation_plot(bool is_plot, const std::string& filename, const std::string csv_path)
+std::optional<delaunator::Delaunator> MDSimulation::triangulation_plot(bool is_plot, const std::string& filename, const std::string& csv_path, const std::vector<double>& rho)
 {
-    if (cfg_manager.config.rank_idx != 0 || !is_plot) {
+    if (cfg_manager.config.rank_idx != 0) {
+        return std::nullopt;
+    }
+
+    const auto& cfg = cfg_manager.config;
+    const double Lx = cfg.box_w_global;
+    const double Ly = cfg.box_h_global;
+
+    double sigma_max = std::max({cfg.SIGMA_AA, cfg.SIGMA_BB, cfg.SIGMA_AB});
+    
+    // Define w = 10 * cutoff * sigma_max
+    double w = 10.0 * cfg.cutoff * sigma_max;
+    
+    // Use w for both dimensions as requested
+    double width_x = w;
+    double width_y = w;
+
+    std::vector<double> interfaces;
+    if (!rho.empty()) {
+        const int N_bins = static_cast<int>(rho.size());
+        if (N_bins > 0) {
+            const double dx = Lx / static_cast<double>(N_bins);
+            for (int i = 0; i < N_bins; ++i) {
+                int idx_left  = (i - 1 + N_bins) % N_bins;
+                int idx_right = (i + 1) % N_bins;
+
+                if (rho[idx_left] * rho[idx_right] <= 0.0) {
+                    double x_loc = (i + 0.5) * dx; 
+                    interfaces.push_back(x_loc);
+                }
+            }
+        }
+    }
+
+    _build_interface_coords(
+        h_particles, Lx, Ly, interfaces, width_x, width_y,
+        coords, vertex_to_idx 
+    );
+
+    if (coords.size() < 6) {
+        if (is_plot) {
+            RankZeroPrint("[Warning] Not enough points for triangulation ({} points). Skipping.\n", coords.size()/2);
+        }
+        return std::nullopt;
+    }
+
+    try {
+        delaunator::Delaunator d(coords);
+
+        if (is_plot) {
+            plot_triangulation_python(
+                h_particles, d, filename, csv_path,
+                Lx, Ly, cfg.SIGMA_AA, cfg.SIGMA_BB
+            );
+        }
+        return d;
+    } catch (const std::exception& e) {
+        RankZeroPrint("[Warning] Triangulation failed (likely collinear points). Skipping plot. Reason: {}\n", e.what());
+        return std::nullopt;
+    }
+}
+
+void MDSimulation::plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho)
+{
+    if (cfg_manager.config.rank_idx != 0) return;
+
+    RankZeroPrint("[DEBUG] running triangulation_plot...\n");
+    
+    auto d_opt = triangulation_plot(false, "", "", rho);
+
+    if (!d_opt) {
+        RankZeroPrint("[DEBUG] triangulation_plot returned empty/failed. Skipping interface plot.\n");
         return;
     }
 
-    const double Lx = cfg_manager.config.box_w_global;
-    const double Ly = cfg_manager.config.box_h_global;
-
-    _build_periodic_coords(
-        h_particles,
-        Lx,
-        Ly,
-        coords
+    RankZeroPrint("[DEBUG] running locate_interface...\n");
+    std::vector<std::vector<double>> interfaces = locate_interface(*d_opt);
+    
+    plot_interfaces_python(
+        h_particles, interfaces, filename, csv_path,
+        cfg_manager.config.box_w_global, cfg_manager.config.box_h_global,
+        cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_BB
     );
-
-    delaunator::Delaunator d(coords);
-
-    // const std::string csv_path = filename + ".csv";
-    plot_triangulation_python(
-        h_particles,
-        d,
-        filename,
-        csv_path,
-        Lx,
-        Ly,
-        cfg_manager.config.SIGMA_AA,
-        cfg_manager.config.SIGMA_BB);
+    
+    RankZeroPrint("[DEBUG] plot_interfaces finished.\n");
 }
 
-
-std::vector<double> MDSimulation::get_density_profile(int n_bins_per_rank)
+std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
 {
     std::vector<int> count_A(n_bins_per_rank, 0);
     std::vector<int> count_B(n_bins_per_rank, 0);
@@ -1581,7 +1667,7 @@ std::vector<double> MDSimulation::get_density_profile(int n_bins_per_rank)
     const double xmin = cfg_manager.config.x_min;
     const double xmax = cfg_manager.config.x_max;
 
-    int blocks = (n_local + threads - 1)/threads;
+    int blocks = (n_local + threads - 1) / threads;
     size_t shared_mem_size = static_cast<size_t>(2 * n_bins_per_rank * sizeof(int));
 
     thrust::device_vector<int> d_count_A(n_bins_per_rank, 0);
@@ -1601,13 +1687,11 @@ std::vector<double> MDSimulation::get_density_profile(int n_bins_per_rank)
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
-    // Copy back to host
     if (n_bins_per_rank > 0) {
         thrust::copy(d_count_A.begin(), d_count_A.end(), count_A.begin());
         thrust::copy(d_count_B.begin(), d_count_B.end(), count_B.begin());
     }
 
-    // MPI: gather from all ranks
     int world_size = 1;
     int world_rank = 0;
     MPI_Comm_size(comm, &world_size);
@@ -1635,28 +1719,129 @@ std::vector<double> MDSimulation::get_density_profile(int n_bins_per_rank)
         0, comm
     );
 
-    // Pack into result: first half NA, second half NB
-    std::vector<double> result;
+    std::vector<int> result;
     if (world_rank == 0) {
         result.resize(static_cast<std::size_t>(total_bins) * 2u);
         for (int i = 0; i < total_bins; ++i) {
-            result[i]               = static_cast<double>(all_A[i]);          // NA
-            result[i + total_bins]  = static_cast<double>(all_B[i]);          // NB
+            result[i] = all_A[i];
+            result[i + total_bins] = all_B[i];
         }
     } else {
-        // Non-root ranks still get the full profile (optional but convenient)
         result.resize(static_cast<std::size_t>(total_bins) * 2u);
     }
 
-    // Broadcast packed profile to all ranks
     if (total_bins > 0) {
         MPI_Bcast(result.data(),
                   total_bins * 2,
-                  MPI_DOUBLE,
+                  MPI_INT,
                   0,
                   comm);
     }
 
     return result;
+}
+
+struct GraphEdge {
+    size_t u;
+    size_t v;
+    double length;
+};
+
+std::vector<std::vector<double>> MDSimulation::locate_interface(const delaunator::Delaunator& d) {
+    std::vector<std::vector<double>> result;
+    if (cfg_manager.config.rank_idx != 0 || d.triangles.empty() || vertex_to_idx.empty()) {
+        return result;
+    }
+
+    const double Ly = cfg_manager.config.box_h_global;
+    size_t num_triangles = d.triangles.size() / 3;
     
+    std::vector<GraphEdge> interface_edges;
+    std::set<std::pair<size_t, size_t>> processed_edges;
+
+    for (size_t i = 0; i < num_triangles; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            size_t v1 = d.triangles[3 * i + j];
+            size_t v2 = d.triangles[3 * i + (j + 1) % 3];
+
+            if (v1 > v2) std::swap(v1, v2);
+
+            if (processed_edges.count({v1, v2})) continue;
+            processed_edges.insert({v1, v2});
+
+            int idx1 = vertex_to_idx[v1];
+            int idx2 = vertex_to_idx[v2];
+            
+            if (h_particles[idx1].type != h_particles[idx2].type) {
+                double x1 = d.coords[2 * v1];
+                double y1 = d.coords[2 * v1 + 1];
+                double x2 = d.coords[2 * v2];
+                double y2 = d.coords[2 * v2 + 1];
+                double len = std::sqrt(std::pow(x1-x2, 2) + std::pow(y1-y2, 2));
+                interface_edges.push_back({v1, v2, len});
+            }
+        }
+    }
+
+    if (interface_edges.empty()) return result;
+
+    size_t max_v = d.coords.size() / 2;
+    std::vector<int> parent(max_v);
+    std::iota(parent.begin(), parent.end(), 0);
+
+    auto find_set = [&](int i, auto&& find_ref) -> int {
+        if (parent[i] == i) return i;
+        return parent[i] = find_ref(parent[i], find_ref);
+    };
+    auto union_sets = [&](int i, int j) {
+        int root_i = find_set(i, find_set);
+        int root_j = find_set(j, find_set);
+        if (root_i != root_j) parent[root_i] = root_j;
+    };
+
+    for (const auto& edge : interface_edges) union_sets(edge.u, edge.v);
+
+    std::map<int, std::vector<GraphEdge>> components;
+    std::map<int, double> component_lengths;
+
+    for (const auto& edge : interface_edges) {
+        int root = find_set(edge.u, find_set);
+        components[root].push_back(edge);
+        component_lengths[root] += edge.length;
+    }
+
+    for (auto& comp : components) {
+        if (component_lengths[comp.first] > Ly) {
+            std::vector<double> segment_coords;
+            segment_coords.reserve(comp.second.size() * 4);
+            for (const auto& edge : comp.second) {
+                segment_coords.push_back(d.coords[2 * edge.u]);
+                segment_coords.push_back(d.coords[2 * edge.u + 1]);
+                segment_coords.push_back(d.coords[2 * edge.v]);
+                segment_coords.push_back(d.coords[2 * edge.v + 1]);
+            }
+            result.push_back(std::move(segment_coords));
+        }
+    }
+    return result;
+}
+
+std::vector<double> MDSimulation::get_density_profile(int n_bins_per_rank) {
+    std::vector<int> n_profile = get_N_profile(n_bins_per_rank);
+    size_t total_bins = n_profile.size() / 2;
+    std::vector<double> result(total_bins);
+
+    for (size_t i = 0; i < total_bins; ++i) {
+        double n_a = static_cast<double>(n_profile[i]);
+        double n_b = static_cast<double>(n_profile[i + total_bins]);
+        double sum = n_a + n_b;
+
+        if (sum == 0.0) {
+            result[i] = 0.0;
+        } else {
+            result[i] = (n_a - n_b) / sum;
+        }
+    }
+
+    return result;
 }

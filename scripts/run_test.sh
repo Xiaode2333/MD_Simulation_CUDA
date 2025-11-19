@@ -59,6 +59,7 @@ cmake -B build -S . \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build build -j
 
+echo "Build complete. Now running..."
 srun --cpu-bind=none ./build/run_test_run_test
 
 # cmake -B build-debug -S . \

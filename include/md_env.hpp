@@ -14,30 +14,51 @@
 #include <cmath>
 #include <random>
 #include <delaunator-header-only.hpp>
+#include <optional>
 
 
 
 class MDSimulation {
     public:
         MDSimulation(class MDConfigManager config_manager, MPI_Comm comm);
-
         ~MDSimulation();
 
         void save_env();
         static MDSimulation load_env();
-        void plot_particles(const std::string& filename, const std::string& csv_path);//Assume particles are prepared in h_particles on rank 0
+        
+        void plot_particles(const std::string& filename, const std::string& csv_path);
+        
         double cal_total_K();
         double cal_total_U();
-        void step_single_NVE();// step single timestep, including subdomain exchanges and halo update, but not collect to host. Assume acc updated, and update acc again after finish.
+        
+        void step_single_NVE();
         void step_single_nose_hoover();
-        void sample_collect();// before sampling or plot collect all particles to h_particles on rank 0
-        void triangulation_plot(bool is_plot, const std::string& filename, const std::string csv_path);//do sample_collect() first. 
-        std::vector<double> get_density_profile(int n_bins_per_rank); //first half NA, second half NB, with total len n_bins_per_rank*rank_size
+        
+        void sample_collect();
+
+        std::optional<delaunator::Delaunator> triangulation_plot(bool is_plot, const std::string& filename, const std::string& csv_path, const std::vector<double>& rho);
+        
+        std::vector<std::vector<double>> locate_interface(const delaunator::Delaunator& d);
+
+        void plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho);
+        
+        std::vector<int> get_N_profile(int n_bins_per_rank); 
+        std::vector<double> get_density_profile(int n_bins_per_rank);
+
+        template <typename... Args>
+        void RankZeroPrint(fmt::format_string<Args...> format_str, Args&&... args) {
+            if (cfg_manager.config.rank_idx == 0) {
+                fmt::print(format_str, std::forward<Args>(args)...);
+                std::fflush(stdout);
+            }
+        }
+        
     private:
         MDConfigManager cfg_manager;
         MPI_Comm comm;
 
         std::vector<double> coords; //For triangulation
+        std::vector<int> vertex_to_idx;
 
         std::vector<Particle> h_particles; //typically all data is on device. When sampling first transfer them to host
         std::vector<Particle> h_particles_local;
@@ -64,7 +85,6 @@ class MDSimulation {
         void broadcast_params();
         void allocate_memory();
         void init_particles();// Only update h_particles on rank 0
-        double cal_local_energy();
         double compute_kinetic_energy_local();
         void distribute_particles_h2d();
         void collect_particles_d2h(); // collect particles from device to host, only to host of rank 0

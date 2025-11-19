@@ -64,3 +64,20 @@ void plot_triangulation_python(const std::vector<Particle>& particles,
                                const double box_h,
                                const double sigma_aa,
                                const double sigma_bb);
+
+void print_interfaces_csv(const std::vector<Particle>& particles,
+                          const std::vector<std::vector<double>>& interfaces,
+                          const std::string& filename,
+                          double box_w,
+                          double box_h,
+                          double sigma_aa,
+                          double sigma_bb);
+
+void plot_interfaces_python(const std::vector<Particle>& particles,
+                            const std::vector<std::vector<double>>& interfaces,
+                            const std::string& filename,
+                            const std::string& csv_path,
+                            const double box_w,
+                            const double box_h,
+                            const double sigma_aa,
+                            const double sigma_bb);
