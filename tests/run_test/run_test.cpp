@@ -51,6 +51,7 @@ int main(){
 
     const int n_steps = 1000000;
     const int n_record_interval = static_cast<int>(cfg_mgr.config.save_dt_interval/cfg_mgr.config.dt);
+    int n_grid_y  = static_cast<int>(cfg_mgr.config.box_h_global);
 
     std::string frame_dir = "./tests/run_test/frames/";
     std::string interface_dir = "./tests/run_test/interfaces/";

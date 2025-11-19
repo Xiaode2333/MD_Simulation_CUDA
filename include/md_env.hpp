@@ -39,6 +39,7 @@ class MDSimulation {
         std::optional<delaunator::Delaunator> triangulation_plot(bool is_plot, const std::string& filename, const std::string& csv_path, const std::vector<double>& rho);
         
         std::vector<std::vector<double>> locate_interface(const delaunator::Delaunator& d);
+        std::vector<std::vector<double>> get_smooth_interface(int n_grid_y, double smoothing_sigma);
 
         void plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho);
         

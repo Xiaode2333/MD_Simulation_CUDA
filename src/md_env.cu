@@ -1636,17 +1636,15 @@ void MDSimulation::plot_interfaces(const std::string& filename, const std::strin
 {
     if (cfg_manager.config.rank_idx != 0) return;
 
-    RankZeroPrint("[DEBUG] running triangulation_plot...\n");
-    
-    auto d_opt = triangulation_plot(false, "", "", rho);
+    RankZeroPrint("[DEBUG] Generating smooth interface (Grid Method)...\n");
 
-    if (!d_opt) {
-        RankZeroPrint("[DEBUG] triangulation_plot returned empty/failed. Skipping interface plot.\n");
-        return;
-    }
+    // Resolution: Use ~1.0 sigma resolution for fine enough detail to see waves,
+    // but coarse enough that smoothing works.
+    int n_grid_y = static_cast<int>(cfg_manager.config.box_h_global / 2.5); 
+    if (n_grid_y < 10) n_grid_y = 10;
 
-    RankZeroPrint("[DEBUG] running locate_interface...\n");
-    std::vector<std::vector<double>> interfaces = locate_interface(*d_opt);
+    // Smoothing sigma: 2.0 grid cells (approx 2.0 sigma) to kill molecular noise
+    std::vector<std::vector<double>> interfaces = get_smooth_interface(n_grid_y, 2.5);
     
     plot_interfaces_python(
         h_particles, interfaces, filename, csv_path,
@@ -1655,6 +1653,190 @@ void MDSimulation::plot_interfaces(const std::string& filename, const std::strin
     );
     
     RankZeroPrint("[DEBUG] plot_interfaces finished.\n");
+}
+
+std::vector<std::vector<double>> MDSimulation::get_smooth_interface(int n_grid_y, double smoothing_sigma) {
+    std::vector<std::vector<double>> result;
+    if (cfg_manager.config.rank_idx != 0) return result;
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+    
+    // Calculate aspect-ratio corrected X grid size
+    int n_grid_x = static_cast<int>(n_grid_y * (Lx / Ly));
+    if (n_grid_x < 10) n_grid_x = 10;
+
+    std::vector<double> grid(n_grid_x * n_grid_y, 0.0);
+    double dx = Lx / n_grid_x;
+    double dy = Ly / n_grid_y;
+
+    // 1. Binning (Density Field)
+    for (const auto& p : h_particles) {
+        int ix = static_cast<int>(p.pos.x / dx);
+        int iy = static_cast<int>(p.pos.y / dy);
+        // PBC clamp
+        ix = (ix % n_grid_x + n_grid_x) % n_grid_x;
+        iy = (iy % n_grid_y + n_grid_y) % n_grid_y;
+        
+        // Order Parameter: Type 0 (+1) vs Type 1 (-1)
+        grid[iy * n_grid_x + ix] += (p.type == 0 ? 1.0 : -1.0);
+    }
+
+    // 2. Gaussian Smoothing (X-axis)
+    // Smoothing primarily along X removes density jumps perpendicular to interface
+    // (Smoothing along Y removes waves - use carefully!)
+    int passes = static_cast<int>(std::ceil(smoothing_sigma));
+    std::vector<double> temp_grid = grid;
+    
+    for (int p = 0; p < passes; ++p) {
+        std::vector<double> next_grid = temp_grid;
+        for (int y = 0; y < n_grid_y; ++y) {
+            for (int x = 0; x < n_grid_x; ++x) {
+                int xm = (x - 1 + n_grid_x) % n_grid_x;
+                int xp = (x + 1) % n_grid_x;
+                // 3-point blur along X
+                next_grid[y*n_grid_x + x] = 0.25*temp_grid[y*n_grid_x + xm] + 
+                                            0.50*temp_grid[y*n_grid_x + x] + 
+                                            0.25*temp_grid[y*n_grid_x + xp];
+            }
+        }
+        temp_grid = next_grid;
+    }
+
+    // 3. Identify Anchors (Main Interfaces) using 1D Projection
+    // This forces us to find exactly 2 interfaces and ignore bubbles.
+    std::vector<double> profile_1d(n_grid_x, 0.0);
+    for(int x=0; x<n_grid_x; ++x) {
+        for(int y=0; y<n_grid_y; ++y) profile_1d[x] += temp_grid[y*n_grid_x + x];
+    }
+    
+    std::vector<double> anchors;
+    for(int x=0; x<n_grid_x; ++x) {
+        int x_next = (x+1)%n_grid_x;
+        // Zero crossing in 1D profile
+        if(profile_1d[x] * profile_1d[x_next] <= 0.0) {
+             anchors.push_back((x + 0.5) * dx);
+        }
+    }
+    
+    // Enforce exactly 2 interfaces if possible (filter spurious ones)
+    if(anchors.size() > 2) {
+        // Heuristic: Find the pair with largest separation
+        // Or just take first 2 if clean. 
+        anchors.resize(2); 
+    } else if (anchors.empty()) {
+        return result; 
+    }
+
+    // 4. Cluster Crossings to Anchors & Build Paths
+    struct Point { double x, y; };
+    result.resize(anchors.size());
+
+    for(int k=0; k<(int)anchors.size(); ++k) {
+        double ref_loc = anchors[k];
+        
+        // Storage for the averaged path: x_mean per y-bin
+        std::vector<double> x_means(n_grid_y, 0.0);
+        std::vector<int> counts(n_grid_y, 0);
+
+        // Scan every row for zero crossings near this anchor
+        for (int y = 0; y < n_grid_y; ++y) {
+            for (int x = 0; x < n_grid_x; ++x) {
+                int idx = y * n_grid_x + x;
+                int idx_next = y * n_grid_x + (x + 1) % n_grid_x;
+                double v1 = temp_grid[idx];
+                double v2 = temp_grid[idx_next];
+
+                if (v1 * v2 <= 0.0 && v1 != v2) {
+                    // Sub-grid position
+                    double frac = std::abs(v1) / (std::abs(v1) + std::abs(v2));
+                    double cx = (x + frac) * dx;
+                    
+                    // Check distance to current anchor (PBC aware)
+                    double dist = cx - ref_loc;
+                    while(dist > Lx/2.0) dist -= Lx;
+                    while(dist < -Lx/2.0) dist += Lx;
+                    
+                    // Only accept if it belongs to THIS anchor (closest one)
+                    // and is within reasonable range (e.g. 1/4 box width)
+                    if (std::abs(dist) < Lx/4.0) {
+                        // We accumulate the RELATIVE distance (dx) to avoid PBC averaging bugs
+                        // (e.g. averaging x=0.1 and x=L-0.1 should give x=0.0, not L/2)
+                        x_means[y] += dist; // Sum of relative offsets
+                        counts[y]++;
+                    }
+                }
+            }
+        }
+
+        // Post-Process Path: Averaging & Interpolation
+        std::vector<double> final_path_x(n_grid_y, 0.0);
+        std::vector<bool> valid(n_grid_y, false);
+
+        for(int y=0; y<n_grid_y; ++y) {
+            if(counts[y] > 0) {
+                double avg_dx = x_means[y] / counts[y];
+                double abs_x = ref_loc + avg_dx;
+                // Wrap back to domain [0, Lx]
+                while(abs_x < 0) abs_x += Lx;
+                while(abs_x >= Lx) abs_x -= Lx;
+                
+                final_path_x[y] = abs_x;
+                valid[y] = true;
+            }
+        }
+
+        // Interpolate gaps (Linear or Hold)
+        // 1. Find any valid point to start
+        int start_idx = -1;
+        for(int i=0; i<n_grid_y; ++i) if(valid[i]) { start_idx=i; break; }
+
+        if(start_idx == -1) {
+            // No points found for this anchor? Fallback to straight line
+            std::fill(final_path_x.begin(), final_path_x.end(), ref_loc);
+        } else {
+            // Forward fill + Wrap
+            // We iterate 2*N times to ensure we cover gaps crossing the periodic boundary
+            double last_val = final_path_x[start_idx];
+            
+            // First pass: fill from start_idx to end
+            for(int i=0; i<n_grid_y; ++i) {
+                int idx = (start_idx + i) % n_grid_y;
+                if(valid[idx]) last_val = final_path_x[idx];
+                else final_path_x[idx] = last_val; // Simple hold interpolation
+            }
+            // Second pass: fill from 0 to start_idx (if any gaps remained at start)
+             for(int i=0; i<n_grid_y; ++i) {
+                int idx = (start_idx + i) % n_grid_y;
+                if(valid[idx]) last_val = final_path_x[idx];
+                else final_path_x[idx] = last_val;
+            }
+        }
+
+        // Generate Segments
+        std::vector<double> segs;
+        segs.reserve(n_grid_y * 4);
+        
+        for(int y=0; y<n_grid_y; ++y) {
+            double x1 = final_path_x[y];
+            double y1 = (y + 0.5) * dy;
+            
+            int next_y = (y + 1) % n_grid_y;
+            double x2 = final_path_x[next_y];
+            double y2 = (y + 1.5) * dy;
+
+            // Horizontal Line Fix:
+            // Do not draw segment if X jumps across boundary (wraps)
+            double dist_x = std::abs(x2 - x1);
+            if (dist_x < Lx * 0.5) {
+                 segs.push_back(x1); segs.push_back(y1);
+                 segs.push_back(x2); segs.push_back(y2);
+            }
+        }
+        result[k] = std::move(segs);
+    }
+
+    return result;
 }
 
 std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
@@ -1748,14 +1930,16 @@ struct GraphEdge {
 };
 
 std::vector<std::vector<double>> MDSimulation::locate_interface(const delaunator::Delaunator& d) {
+
     std::vector<std::vector<double>> result;
+
     if (cfg_manager.config.rank_idx != 0 || d.triangles.empty() || vertex_to_idx.empty()) {
         return result;
     }
 
     const double Ly = cfg_manager.config.box_h_global;
     size_t num_triangles = d.triangles.size() / 3;
-    
+
     std::vector<GraphEdge> interface_edges;
     std::set<std::pair<size_t, size_t>> processed_edges;
 
@@ -1771,12 +1955,13 @@ std::vector<std::vector<double>> MDSimulation::locate_interface(const delaunator
 
             int idx1 = vertex_to_idx[v1];
             int idx2 = vertex_to_idx[v2];
-            
+
             if (h_particles[idx1].type != h_particles[idx2].type) {
                 double x1 = d.coords[2 * v1];
                 double y1 = d.coords[2 * v1 + 1];
                 double x2 = d.coords[2 * v2];
                 double y2 = d.coords[2 * v2 + 1];
+
                 double len = std::sqrt(std::pow(x1-x2, 2) + std::pow(y1-y2, 2));
                 interface_edges.push_back({v1, v2, len});
             }
@@ -1784,7 +1969,6 @@ std::vector<std::vector<double>> MDSimulation::locate_interface(const delaunator
     }
 
     if (interface_edges.empty()) return result;
-
     size_t max_v = d.coords.size() / 2;
     std::vector<int> parent(max_v);
     std::iota(parent.begin(), parent.end(), 0);
@@ -1824,7 +2008,9 @@ std::vector<std::vector<double>> MDSimulation::locate_interface(const delaunator
         }
     }
     return result;
+
 }
+
 
 std::vector<double> MDSimulation::get_density_profile(int n_bins_per_rank) {
     std::vector<int> n_profile = get_N_profile(n_bins_per_rank);
