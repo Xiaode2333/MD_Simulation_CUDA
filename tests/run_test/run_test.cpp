@@ -99,12 +99,13 @@ int main(){
                     RankZeroPrint(rank_idx, "Equilibrated. Exiting.\n");
                     break;
                 }
-                // double U_tot = sim.cal_total_U();
+                
+                double U_tot = sim.cal_total_U();
 
-                // sim.RankZeroPrint("U_tot = {:.4e}\n", U_tot);
-                // sim.write_to_file(U_tot_csv_path, "U_tot, {}, step, {}\n", U_tot, step);
+                sim.RankZeroPrint("U_tot = {:.4e}\n", U_tot);
+                sim.write_to_file(U_tot_csv_path, "U_tot, {}, step, {}\n", U_tot, step);
 
-                // sim.save_env(saved_env_file, step);
+                sim.save_env(saved_env_file, step);
 
                 // std::string frame_path = frame_dir + fmt::format("frame_step_{}.svg", step);
                 // std::string csv_path = csv_dir + fmt::format("frame_step_{}.csv", step);

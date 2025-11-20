@@ -1,7 +1,27 @@
 // md_config.cpp
 #include "md_config.hpp"
 
+#include <sstream>
+#include <type_traits>
+
 namespace {
+template <typename T>
+bool parse_scalar(const std::string& text, T& out) {
+    std::istringstream iss(text);
+    iss >> out;
+    if (iss.fail()) {
+        return false;
+    }
+    iss >> std::ws;
+    return iss.eof();
+}
+
+template <>
+bool parse_scalar<std::string>(const std::string& text, std::string& out) {
+    out = text;
+    return true;
+}
+
 void load_from_json_object(const json& j, MDConfig& cfg) {
     // Start from struct defaults (value-initialized, so in-class defaults are kept)
     MDConfig defaults{};
@@ -220,4 +240,93 @@ std::string MDConfigManager::serialize() const {
 void MDConfigManager::deserialize(const std::string& data) {
     auto j = json::parse(data);
     load_from_json_object(j, config);
+}
+
+bool MDConfigManager::apply_override(const std::string& key, const std::string& value) {
+    auto assign_numeric = [&](auto& field) -> bool {
+        using FieldType = std::decay_t<decltype(field)>;
+        FieldType parsed{};
+        if (!parse_scalar<FieldType>(value, parsed)) {
+            return false;
+        }
+        field = parsed;
+        return true;
+    };
+
+    auto assign_string = [&](std::string& field) {
+        field = value;
+        return true;
+    };
+
+    if (key == "n_particles_global") return assign_numeric(config.n_particles_global);
+    if (key == "n_particles_type0") return assign_numeric(config.n_particles_type0);
+    if (key == "box_w_global") return assign_numeric(config.box_w_global);
+    if (key == "box_h_global") return assign_numeric(config.box_h_global);
+    if (key == "T_init") return assign_numeric(config.T_init);
+    if (key == "T_target") return assign_numeric(config.T_target);
+    if (key == "SIGMA_AA") return assign_numeric(config.SIGMA_AA);
+    if (key == "SIGMA_BB") return assign_numeric(config.SIGMA_BB);
+    if (key == "SIGMA_AB") return assign_numeric(config.SIGMA_AB);
+    if (key == "EPSILON_AA") return assign_numeric(config.EPSILON_AA);
+    if (key == "EPSILON_BB") return assign_numeric(config.EPSILON_BB);
+    if (key == "EPSILON_AB") return assign_numeric(config.EPSILON_AB);
+    if (key == "MASS_A") return assign_numeric(config.MASS_A);
+    if (key == "MASS_B") return assign_numeric(config.MASS_B);
+    if (key == "devide_p") return assign_numeric(config.devide_p);
+    if (key == "dt") return assign_numeric(config.dt);
+    if (key == "Q") return assign_numeric(config.Q);
+    if (key == "save_dt_interval") return assign_numeric(config.save_dt_interval);
+    if (key == "cutoff") return assign_numeric(config.cutoff);
+    if (key == "run_name") return assign_string(config.run_name);
+    if (key == "load_name") return assign_string(config.load_name);
+    if (key == "THREADS_PER_BLOCK") return assign_numeric(config.THREADS_PER_BLOCK);
+    if (key == "rank_size") return assign_numeric(config.rank_size);
+    if (key == "rank_idx") return assign_numeric(config.rank_idx);
+    if (key == "n_local") return assign_numeric(config.n_local);
+    if (key == "n_halo_left") return assign_numeric(config.n_halo_left);
+    if (key == "n_halo_right") return assign_numeric(config.n_halo_right);
+    if (key == "n_cap") return assign_numeric(config.n_cap);
+    if (key == "halo_left_cap") return assign_numeric(config.halo_left_cap);
+    if (key == "halo_right_cap") return assign_numeric(config.halo_right_cap);
+    if (key == "left_rank") return assign_numeric(config.left_rank);
+    if (key == "right_rank") return assign_numeric(config.right_rank);
+    if (key == "x_min") return assign_numeric(config.x_min);
+    if (key == "x_max") return assign_numeric(config.x_max);
+
+    return false;
+}
+
+void MDConfigManager::apply_overrides(const std::vector<MDConfigOverride>& overrides) {
+    for (const auto& override_item : overrides) {
+        if (!apply_override(override_item.key, override_item.value)) {
+            throw std::runtime_error(
+                fmt::format("Invalid override '{}={}'", override_item.key, override_item.value)
+            );
+        }
+    }
+}
+
+bool MDConfigManager::parse_override_argument(const std::string& argument, std::string& out_key, std::string& out_value) {
+    if (argument.empty()) {
+        return false;
+    }
+
+    std::string token = argument;
+    if (token.rfind("--", 0) == 0) {
+        token.erase(0, 2);
+    }
+
+    if (token.rfind('D', 0) == 0) {
+        token.erase(0, 1);
+    }
+
+    auto equal_pos = token.find('=');
+    if (equal_pos == std::string::npos) {
+        return false;
+    }
+
+    out_key = token.substr(0, equal_pos);
+    out_value = token.substr(equal_pos + 1);
+
+    return !out_key.empty();
 }

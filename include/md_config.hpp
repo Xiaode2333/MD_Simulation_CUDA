@@ -6,6 +6,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <fmt/core.h>
+#include <vector>
 
 // Use a type alias for convenience
 using json = nlohmann::json;
@@ -51,6 +52,11 @@ struct MDConfig {
     
 };
 
+struct MDConfigOverride {
+    std::string key;
+    std::string value;
+};
+
 class MDConfigManager {
     public:
     
@@ -71,6 +77,12 @@ class MDConfigManager {
         void deserialize(const std::string& data);
 
         void print_config();
+        
+        bool apply_override(const std::string& key, const std::string& value);
+
+        void apply_overrides(const std::vector<MDConfigOverride>& overrides);
+
+        static bool parse_override_argument(const std::string& argument, std::string& out_key, std::string& out_value);
     private:
 
 };

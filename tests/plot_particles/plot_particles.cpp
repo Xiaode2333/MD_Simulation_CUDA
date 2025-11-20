@@ -10,7 +10,7 @@
 #include <string>
 #include <filesystem>
 
-#include "../../include/md_particle.hpp"   // contains Particle + print_particles
+#include "md_particle.hpp"   // contains Particle + print_particles
 
 int main() {
     const double box_w = 200;

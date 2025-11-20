@@ -29,7 +29,6 @@ find_package(ZLIB REQUIRED)
 
 # ---- Header-only Libs ----
 find_path(DELAUNATOR_CPP_INCLUDE_DIRS "delaunator-header-only.hpp")
-find_path(MATPLOTLIB_CPP_INCLUDE_DIRS "matplotlibcpp.h")
 
 # ---- MPI / CUDA Helper ----
 if(DEFINED ENV{OMPI_CUDA_PREFIX})
@@ -88,13 +87,6 @@ if(NOT NUMPY_STATUS EQUAL 0 OR PYTHON_NUMPY_INCLUDE_DIR STREQUAL "")
     message(FATAL_ERROR "NumPy not found for Python: ${Python3_EXECUTABLE}")
 endif()
 
-execute_process(
-    COMMAND "${Python3_EXECUTABLE}" "-c" "import matplotlib"
-    RESULT_VARIABLE MATPLOTLIB_IMPORT_RESULT
-)
-if(NOT MATPLOTLIB_IMPORT_RESULT EQUAL 0)
-    message(FATAL_ERROR "Python3 matplotlib module not found for interpreter: ${Python3_EXECUTABLE}")
-endif()
 
 # ---- Project Directories ----
 set(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -102,6 +94,7 @@ set(INCLUDE_DIR "${PROJECT_ROOT}/include")
 set(CUDA_DIR    "${PROJECT_ROOT}/src")
 set(SRC_DIR     "${PROJECT_ROOT}/src")
 set(TESTS_DIR   "${PROJECT_ROOT}/tests")
+set(RUNS_DIR   "${PROJECT_ROOT}/run")
 
 # ---- Sources ----
 file(GLOB_RECURSE PROJECT_HEADERS "${INCLUDE_DIR}/*.hpp")
@@ -120,7 +113,6 @@ target_include_directories(md_particle_lib
     PUBLIC
         "${PROJECT_ROOT}"
         "${INCLUDE_DIR}"
-        "${MATPLOTLIB_CPP_INCLUDE_DIRS}"
         ${Python3_INCLUDE_DIRS}
         ${PYTHON_NUMPY_INCLUDE_DIR}
         ${OMPI_CUDA_INCLUDE}
@@ -160,7 +152,35 @@ foreach(test_src IN LISTS TEST_SOURCES)
         PRIVATE
             "${PROJECT_ROOT}"
             "${INCLUDE_DIR}"
-            "${MATPLOTLIB_CPP_INCLUDE_DIRS}"
+            ${Python3_INCLUDE_DIRS}
+            ${PYTHON_NUMPY_INCLUDE_DIR}
+            ${MPI_ALL_INCLUDES}
+            ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
+    )
+endforeach()
+
+# formal runs
+file(GLOB_RECURSE RUN_SOURCES "${RUNS_DIR}/*.cpp")
+
+foreach(run_src IN LISTS RUN_SOURCES)
+    get_filename_component(run_name "${run_src}" NAME_WE)
+    get_filename_component(run_dir "${run_src}" DIRECTORY)
+    get_filename_component(run_dir_name "${run_dir}" NAME)
+
+    set(exe_name "${run_dir_name}_${run_name}")
+
+    add_executable("${exe_name}" "${run_src}")
+
+    target_link_libraries("${exe_name}"
+        PRIVATE
+            md_particle_lib
+            MPI::MPI_CXX
+    )
+
+    target_include_directories("${exe_name}"
+        PRIVATE
+            "${PROJECT_ROOT}"
+            "${INCLUDE_DIR}"
             ${Python3_INCLUDE_DIRS}
             ${PYTHON_NUMPY_INCLUDE_DIR}
             ${MPI_ALL_INCLUDES}
