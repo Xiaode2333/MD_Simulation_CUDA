@@ -66,6 +66,10 @@ class MDConfigManager {
 
         void config_to_json(const std::string& filepath);
 
+        std::string serialize() const;
+
+        void deserialize(const std::string& data);
+
         void print_config();
     private:
 

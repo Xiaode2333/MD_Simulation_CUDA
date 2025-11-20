@@ -14,7 +14,7 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER})
 set(GCC_LIB_PATH "/apps/software/2024a/software/GCCcore/13.3.0/lib64")
-
+set(CMAKE_CUDA_ARCHITECTURES 89)
 
 
 add_link_options("-L${GCC_LIB_PATH}" "-Wl,-rpath,${GCC_LIB_PATH}")

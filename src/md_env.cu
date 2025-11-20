@@ -6,9 +6,13 @@
 
 
 #include <iostream>
+#include <complex>
 #include <numeric>
 #include <map>
 #include <set>
+#include <memory>
+#include <cstdlib>
+#include <cmath>
 
 MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm) {
     this->cfg_manager = config_manager;
@@ -19,6 +23,7 @@ MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm) {
     std::fflush(stdout); // FORCE FLUSH
     
     broadcast_params();
+    init_equilibrium_tracker();
     
     fmt::print("Params broadcasted.\n");
     std::fflush(stdout);
@@ -54,7 +59,84 @@ MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm) {
     cal_forces();
     update_halo(); 
 
-    // collect_particles_d2h(); // Disabled in your snippet
+    // collect_particles_d2h();
+
+    if (cfg_manager.config.rank_idx == 0) {
+        fmt::print("[Rank] {}/{}. MD simulation env initialized.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+        std::fflush(stdout);
+    }
+}
+
+MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm, const std::string& filename, int step) {
+    this->cfg_manager = config_manager;
+    this->comm = comm;
+    xi = 0.0;
+
+    broadcast_params();
+    init_equilibrium_tracker();
+    RankZeroPrint("Params broadcasted.\n");
+
+    allocate_memory();
+    RankZeroPrint("[Rank] {}/{}. Memory allocated.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+
+
+    int rank;
+    MPI_Comm_rank(comm, &rank);
+
+    std::vector<Particle> loaded_particles;
+    bool success = false;
+
+    // 1. Rank 0 reads the file
+    if (rank == 0) {
+        try {
+            FileReader reader(filename);
+            if (!reader.corrupted()) {
+                std::vector<Particle> buf;
+                std::uint64_t frame_index_out = 0;
+                
+                // Scan for the requested frame index
+                while (reader.next_frame(buf, frame_index_out)) {
+                    if (static_cast<int>(frame_index_out) == step) {
+                        loaded_particles = std::move(buf);
+                        success = true;
+                        break;
+                    }
+                }
+                if (!success) {
+                    fmt::print(stderr, "Error: Frame index {} not found in {}.\n", step, filename);
+                }
+            } else {
+                 fmt::print(stderr, "Error: File {} is corrupted.\n", filename);
+            }
+        } catch (const std::exception& e) {
+            fmt::print(stderr, "Error opening file {}: {}\n", filename, e.what());
+            success = false;
+        }
+    }
+    MPI_Bcast(&success, 1, MPI_C_BOOL, 0, comm);
+    
+    if (!success) {
+        MPI_Abort(comm, 1);
+    }
+    if (!loaded_particles.size() == h_particles.size()){
+        RankZeroPrint("[Error] Loaded particle count {} doesn't match n_particles_global {}.\n", loaded_particles.size(), h_particles.size());
+        MPI_Abort(comm, 1);
+    }
+    h_particles = loaded_particles;
+
+
+
+    // Distribute
+    RankZeroPrint("[Rank] {}/{}. Distributing particles.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+    distribute_particles_h2d(); 
+    
+    RankZeroPrint("[Rank] {}/{}. Update_halo.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+    update_halo();
+
+    // Forces
+    RankZeroPrint("[Rank] {}/{}. Updating forces.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
+    cal_forces();
+    update_halo(); 
 
     if (cfg_manager.config.rank_idx == 0) {
         fmt::print("[Rank] {}/{}. MD simulation env initialized.\n", cfg_manager.config.rank_idx, cfg_manager.config.rank_size);
@@ -63,6 +145,138 @@ MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm) {
 }
 
 MDSimulation::~MDSimulation() = default;
+
+void MDSimulation::init_equilibrium_tracker() {
+    t = 0.0;
+    record_interval_dt = cfg_manager.config.save_dt_interval;
+    if (record_interval_dt <= 0.0) {
+        record_interval_dt = cfg_manager.config.dt;
+    }
+    if (record_interval_dt <= 0.0) {
+        record_interval_dt = 1.0;
+    }
+    next_record_time = record_interval_dt;
+
+    const double samples = kEquilibriumWindowTime / record_interval_dt;
+    const int approx_samples = static_cast<int>(std::lround(samples));
+    energy_window_sample_count = static_cast<std::size_t>(std::max(1, approx_samples));
+    energy_history_capacity = std::max<std::size_t>(
+        energy_window_sample_count * 2 * (kBaseRequiredPasses + 1),
+        energy_window_sample_count * 2);
+
+    energy_history.clear();
+    equilibrium_window_streak = 0;
+}
+
+void MDSimulation::append_energy_sample(double U) {
+    if (cfg_manager.config.rank_idx != 0) {
+        return;
+    }
+    if (energy_history_capacity == 0) {
+        energy_history_capacity = std::max<std::size_t>(2, energy_window_sample_count * 2);
+    }
+    if (energy_history.size() >= energy_history_capacity) {
+        energy_history.pop_front();
+    }
+    energy_history.push_back(U);
+}
+
+MDSimulation::WindowStats MDSimulation::compute_window_stats(std::size_t start_idx) const {
+    WindowStats stats{0.0, 0.0};
+    if (energy_window_sample_count == 0 ||
+        energy_history.size() < start_idx + energy_window_sample_count) {
+        return stats;
+    }
+
+    double sum = 0.0;
+    for (std::size_t i = 0; i < energy_window_sample_count; ++i) {
+        sum += energy_history[start_idx + i];
+    }
+    stats.mean = sum / static_cast<double>(energy_window_sample_count);
+
+    if (energy_window_sample_count == 1) {
+        stats.variance = 0.0;
+        return stats;
+    }
+
+    double var_sum = 0.0;
+    for (std::size_t i = 0; i < energy_window_sample_count; ++i) {
+        double diff = energy_history[start_idx + i] - stats.mean;
+        var_sum += diff * diff;
+    }
+    stats.variance = var_sum / static_cast<double>(energy_window_sample_count - 1);
+    return stats;
+}
+
+double MDSimulation::compute_window_relative_change(std::size_t start_idx) const {
+    if (energy_window_sample_count == 0 ||
+        energy_history.size() < start_idx + energy_window_sample_count) {
+        return 0.0;
+    }
+
+    const double U0 = energy_history[start_idx];
+    const double U1 = energy_history[start_idx + energy_window_sample_count - 1];
+    const double eps = 1e-12;
+    double denom = U0;
+    if (std::abs(denom) < eps) {
+        denom = (std::abs(U1) > eps) ? U1 : (U0 >= 0.0 ? 1.0 : -1.0);
+    }
+    if (std::abs(denom) < eps) {
+        return 0.0;
+    }
+    return (U1 - U0) / denom;
+}
+
+double MDSimulation::normal_tail_probability(double z) const {
+    return std::erfc(std::abs(z) / std::sqrt(2.0));
+}
+
+bool MDSimulation::evaluate_equilibrium(double normalized_sensitivity) {
+    if (cfg_manager.config.rank_idx != 0) {
+        return false;
+    }
+    // Two adjacent windows (each 100 units long) must exist before we run the slope + t-test checks.
+    const std::size_t needed = energy_window_sample_count * 2;
+    if (energy_window_sample_count == 0 || energy_history.size() < needed) {
+        return false;
+    }
+
+    const std::size_t second_start = energy_history.size() - energy_window_sample_count;
+    const std::size_t first_start = second_start - energy_window_sample_count;
+
+    const int n_global = std::max(1, cfg_manager.config.n_particles_global);
+    const double base_tol = 1.0 / std::sqrt(static_cast<double>(n_global));
+    const double slope_tol = base_tol * normalized_sensitivity;
+    const double slope_first = std::abs(compute_window_relative_change(first_start));
+    const double slope_second = std::abs(compute_window_relative_change(second_start));
+    const bool slope_ok = (slope_first < slope_tol) && (slope_second < slope_tol);
+
+    const WindowStats stats_first = compute_window_stats(first_start);
+    const WindowStats stats_second = compute_window_stats(second_start);
+
+    const double sample_count = static_cast<double>(energy_window_sample_count);
+    const double se = std::sqrt(
+        stats_first.variance / sample_count +
+        stats_second.variance / sample_count +
+        1e-18);
+    double t_stat = 0.0;
+    if (se > 0.0) {
+        t_stat = std::abs(stats_first.mean - stats_second.mean) / se;
+    }
+
+    double alpha = kBasePValue / normalized_sensitivity;
+    alpha = std::clamp(alpha, 1e-4, 0.5);
+    const bool stat_ok = normal_tail_probability(t_stat) > alpha;
+
+    if (slope_ok && stat_ok) {
+        ++equilibrium_window_streak;
+    } else {
+        equilibrium_window_streak = 0;
+    }
+
+    const int required_passes = std::max(1, static_cast<int>(std::round(kBaseRequiredPasses / normalized_sensitivity)));
+    return equilibrium_window_streak >= required_passes;
+}
 
 void MDSimulation::broadcast_params() {
     int world_rank = 0;
@@ -98,10 +312,30 @@ void MDSimulation::broadcast_params() {
         if (cfg_manager.config.halo_right_cap <= 0) cfg_manager.config.halo_right_cap = halo_cap;
     }
 
-    // WARNING: MDConfig contains std::string. MPI_Bcast on standard layout structs with strings 
-    // sends POINTERS, causing segfaults on receivers. 
-    // Ensure MDConfig uses char arrays (e.g. char run_name[64]) OR serialize this properly.
-    MPI_Bcast(&cfg_manager.config, static_cast<int>(sizeof(MDConfig)), MPI_BYTE, 0, comm);
+    std::string serialized_config;
+    if (world_rank == 0) {
+        serialized_config = cfg_manager.serialize();
+    }
+    int serialized_size = static_cast<int>(serialized_config.size());
+    MPI_Bcast(&serialized_size, 1, MPI_INT, 0, comm);
+    if (serialized_size < 0) {
+        fmt::print(stderr, "[broadcast_params] Invalid serialized size {}.\n", serialized_size);
+        MPI_Abort(comm, 1);
+    }
+    std::vector<char> buffer(static_cast<std::size_t>(serialized_size));
+    if (world_rank == 0 && serialized_size > 0) {
+        std::copy(serialized_config.begin(), serialized_config.end(), buffer.begin());
+    }
+    char dummy = 0;
+    char* data_ptr = buffer.empty() ? &dummy : buffer.data();
+    MPI_Bcast(data_ptr, serialized_size, MPI_CHAR, 0, comm);
+
+    try {
+        cfg_manager.deserialize(std::string(buffer.begin(), buffer.end()));
+    } catch (const std::exception& e) {
+        fmt::print(stderr, "[broadcast_params] Failed to deserialize config: {}\n", e.what());
+        MPI_Abort(comm, 1);
+    }
 
     // Post-broadcast fixups
     cfg_manager.config.rank_idx = world_rank;
@@ -1284,6 +1518,8 @@ void MDSimulation::step_single_NVE() {
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
     }
+
+    t += dt;
 }
 
 
@@ -1376,6 +1612,8 @@ void MDSimulation::step_single_nose_hoover() {
     }
     K_global = cal_total_K();
     // fmt::print("[DEBUG] K_global = {:.4f} After 2nd kick\n", K_global);
+
+    t += dt;
 }
 
 
@@ -1485,6 +1723,28 @@ double MDSimulation::cal_total_U() {
     double       U_global = 0.0;
     MPI_Allreduce(&U_local, &U_global, 1, MPI_DOUBLE, MPI_SUM, comm);
     return U_global;
+}
+
+bool MDSimulation::check_eqlibrium(double sensitivity) {
+    const double normalized = std::max(sensitivity, 1e-3);
+    const double interval = (record_interval_dt > 0.0)
+                                ? record_interval_dt
+                                : (cfg_manager.config.dt > 0.0 ? cfg_manager.config.dt : 1.0);
+    const double epsilon = 1e-12;
+
+    // Collect global U on the record interval boundary so rank 0 can buffer it for the statistical test.
+    while (t + epsilon >= next_record_time) {
+        double U = cal_total_U();
+        append_energy_sample(U);
+        next_record_time += interval;
+    }
+
+    bool local_result = false;
+    if (cfg_manager.config.rank_idx == 0) {
+        local_result = evaluate_equilibrium(normalized);
+    }
+    MPI_Bcast(&local_result, 1, MPI_C_BOOL, 0, comm);
+    return local_result;
 }
 
 void MDSimulation::sample_collect(){
@@ -1640,11 +1900,11 @@ void MDSimulation::plot_interfaces(const std::string& filename, const std::strin
 
     // Resolution: Use ~1.0 sigma resolution for fine enough detail to see waves,
     // but coarse enough that smoothing works.
-    int n_grid_y = static_cast<int>(cfg_manager.config.box_h_global / 2.5); 
+    int n_grid_y = static_cast<int>(cfg_manager.config.box_h_global / 2.0); 
     if (n_grid_y < 10) n_grid_y = 10;
 
     // Smoothing sigma: 2.0 grid cells (approx 2.0 sigma) to kill molecular noise
-    std::vector<std::vector<double>> interfaces = get_smooth_interface(n_grid_y, 2.5);
+    std::vector<std::vector<double>> interfaces = get_smooth_interface(n_grid_y, 2.0);
     
     plot_interfaces_python(
         h_particles, interfaces, filename, csv_path,
@@ -1655,7 +1915,190 @@ void MDSimulation::plot_interfaces(const std::string& filename, const std::strin
     RankZeroPrint("[DEBUG] plot_interfaces finished.\n");
 }
 
-std::vector<std::vector<double>> MDSimulation::get_smooth_interface(int n_grid_y, double smoothing_sigma) {
+namespace {
+void plot_cwa_python(const std::string& csv_path, const std::string& figure_path) {
+    if (csv_path.empty() || figure_path.empty()) {
+        throw std::invalid_argument("plot_cwa_python requires valid paths");
+    }
+    const std::string command =
+        "python ./python/plot_cwa_python.py --csv_path \"" + csv_path +
+        "\" --output \"" + figure_path + "\"";
+    const int status = std::system(command.c_str());
+    if (status != 0) {
+        fmt::print(stderr, "[CWA] plot_cwa_python.py failed with status {}\n", status);
+    }
+}
+} // namespace
+
+void MDSimulation::do_CWA_instant(int q_min, int q_max, const std::string& csv_path, const std::string& plot_path, bool is_plot, int step) {
+    if (cfg_manager.config.rank_idx != 0) {
+        return;
+    }
+
+    if (q_min < 1 || q_max < q_min) {
+        fmt::print(stderr, "[CWA] Invalid q range [{} - {}].\n", q_min, q_max);
+        return;
+    }
+
+    if (csv_path.empty()) {
+        fmt::print(stderr, "[CWA] csv_path must not be empty.\n");
+        return;
+    }
+
+    const double Ly = cfg_manager.config.box_h_global;
+    if (Ly <= 0.0) {
+        fmt::print(stderr, "[CWA] Invalid box height {}.\n", Ly);
+        return;
+    }
+
+    int n_grid_y = static_cast<int>(cfg_manager.config.box_h_global / 2.0);
+    if (n_grid_y < 32) n_grid_y = 32;
+    const double smoothing_sigma = 2.0;
+
+    std::vector<std::vector<double>> interface_paths = compute_interface_paths(n_grid_y, smoothing_sigma);
+    if (interface_paths.empty()) {
+        RankZeroPrint("[CWA] No interfaces detected for analysis.\n");
+        return;
+    }
+
+    const double dy = Ly / n_grid_y;
+    const double pi = 3.14159265358979323846;
+    const int nyquist = n_grid_y / 2;
+    const int max_mode = std::min(q_max, nyquist);
+    if (max_mode < q_min) {
+        fmt::print(stderr, "[CWA] q_max={} is below q_min={} for current grid.\n", q_max, q_min);
+        return;
+    }
+
+    std::vector<double> mode_accum(static_cast<size_t>(max_mode - q_min + 1), 0.0);
+    int n_interfaces_used = 0;
+
+    for (const auto& path : interface_paths) {
+        if (path.size() < static_cast<size_t>(n_grid_y)) {
+            continue;
+        }
+
+        std::vector<double> centered(path.begin(), path.begin() + n_grid_y);
+        double mean_x = std::accumulate(centered.begin(), centered.end(), 0.0) / centered.size();
+        for (double& value : centered) {
+            value -= mean_x;
+        }
+
+        bool has_variation = std::any_of(centered.begin(), centered.end(), [](double v) {
+            return std::abs(v) > 1e-12;
+        });
+        if (!has_variation) {
+            continue;
+        }
+
+        for (int mode = q_min; mode <= max_mode; ++mode) {
+            std::complex<double> accum{0.0, 0.0};
+            double q_value = 2.0 * pi * static_cast<double>(mode) / Ly;
+            for (int j = 0; j < n_grid_y; ++j) {
+                double y_pos = (static_cast<double>(j) + 0.5) * dy;
+                double phase = -q_value * y_pos;
+                accum += std::complex<double>(std::cos(phase), std::sin(phase)) * centered[j];
+            }
+            double norm = 1.0 / static_cast<double>(n_grid_y);
+            double magnitude_sq = std::norm(accum) * (norm * norm);
+            mode_accum[static_cast<size_t>(mode - q_min)] += magnitude_sq;
+        }
+        ++n_interfaces_used;
+    }
+
+    if (n_interfaces_used == 0) {
+        RankZeroPrint("[CWA] No valid interfaces for FFT.\n");
+        return;
+    }
+
+    std::vector<int> modes_used;
+    std::vector<double> q_sq;
+    std::vector<double> spectrum;
+    std::vector<double> c_q; // k_B T / (Ly * S(q)) so ideal theory is gamma * q^2
+    modes_used.reserve(static_cast<size_t>(max_mode - q_min + 1));
+    q_sq.reserve(modes_used.capacity());
+    spectrum.reserve(modes_used.capacity());
+    c_q.reserve(modes_used.capacity());
+
+    const double temperature = cfg_manager.config.T_target;
+    for (int mode = q_min; mode <= max_mode; ++mode) {
+        double q_value = 2.0 * pi * static_cast<double>(mode) / Ly;
+        double q2 = q_value * q_value;
+        double avg_mag = mode_accum[static_cast<size_t>(mode - q_min)] / static_cast<double>(n_interfaces_used);
+        if (!std::isfinite(avg_mag) || avg_mag <= 0.0) {
+            continue;
+        }
+        double c_val = temperature / (Ly * avg_mag);
+        if (!std::isfinite(c_val)) {
+            continue;
+        }
+        modes_used.push_back(mode);
+        q_sq.push_back(q2);
+        spectrum.push_back(avg_mag);
+        c_q.push_back(c_val);
+    }
+
+    if (q_sq.empty()) {
+        RankZeroPrint("[CWA] No usable q-modes for regression.\n");
+        return;
+    }
+
+    double mean_x = std::accumulate(q_sq.begin(), q_sq.end(), 0.0) / q_sq.size();
+    double mean_y = std::accumulate(c_q.begin(), c_q.end(), 0.0) / c_q.size();
+    double numerator = 0.0;
+    double denominator = 0.0;
+    for (size_t i = 0; i < q_sq.size(); ++i) {
+        double dx = q_sq[i] - mean_x;
+        double dy_val = c_q[i] - mean_y;
+        numerator += dx * dy_val;
+        denominator += dx * dx;
+    }
+
+    if (denominator <= 1e-16) {
+        RankZeroPrint("[CWA] Unable to determine slope for gamma (degenerate q-range).\n");
+        return;
+    }
+
+    const double gamma = numerator / denominator;
+    const double C0 = mean_y - gamma * mean_x; // intercept to absorb short-wavelength bias
+
+    if (gamma <= 0.0) {
+        RankZeroPrint("[CWA] Non-positive gamma from regression; skipping output.\n");
+        return;
+    }
+
+    fmt::memory_buffer buffer;
+    fmt::format_to(std::back_inserter(buffer), "step, {}, gamma, {}, C0, {}, Ly, {}", step, gamma, C0, Ly);
+    for (size_t idx = 0; idx < modes_used.size(); ++idx) {
+        const int mode = modes_used[idx];
+        fmt::format_to(std::back_inserter(buffer), ", q_sq_{}, {}", mode, q_sq[idx]);
+        fmt::format_to(std::back_inserter(buffer), ", Cq_{}, {}", mode, c_q[idx]);
+        fmt::format_to(std::back_inserter(buffer), ", S_q_{}, {}", mode, spectrum[idx]);
+        fmt::format_to(std::back_inserter(buffer), ", hq_sq_{}, {}", mode, spectrum[idx]);
+    }
+    fmt::format_to(std::back_inserter(buffer), "\n");
+    std::string line(buffer.data(), buffer.size());
+    write_to_file(csv_path, "{}", line);
+
+    if (is_plot) {
+        std::string figure_path = plot_path.empty() ? csv_path : plot_path;
+        if (figure_path == csv_path) {
+            auto pos = figure_path.rfind('.');
+            if (pos == std::string::npos) {
+                figure_path += ".svg";
+            } else {
+                figure_path.replace(pos, std::string::npos, ".svg");
+            }
+        }
+        try {
+            plot_cwa_python(csv_path, figure_path);
+        } catch (const std::exception& e) {
+            fmt::print(stderr, "[CWA] Plotting failed: {}\n", e.what());
+        }
+    }
+}
+
+std::vector<std::vector<double>> MDSimulation::compute_interface_paths(int n_grid_y, double smoothing_sigma) {
     std::vector<std::vector<double>> result;
     if (cfg_manager.config.rank_idx != 0) return result;
 
@@ -1813,24 +2256,44 @@ std::vector<std::vector<double>> MDSimulation::get_smooth_interface(int n_grid_y
             }
         }
 
-        // Generate Segments
+        result[k] = std::move(final_path_x);
+    }
+
+    return result;
+}
+
+std::vector<std::vector<double>> MDSimulation::get_smooth_interface(int n_grid_y, double smoothing_sigma) {
+    std::vector<std::vector<double>> paths = compute_interface_paths(n_grid_y, smoothing_sigma);
+    std::vector<std::vector<double>> result;
+    if (paths.empty()) {
+        return result;
+    }
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+    double dy = Ly / n_grid_y;
+
+    result.resize(paths.size());
+    for (size_t k = 0; k < paths.size(); ++k) {
+        const auto& path = paths[k];
+        if (path.empty()) continue;
+
         std::vector<double> segs;
-        segs.reserve(n_grid_y * 4);
-        
-        for(int y=0; y<n_grid_y; ++y) {
-            double x1 = final_path_x[y];
+        segs.reserve(path.size() * 4);
+        for (int y = 0; y < n_grid_y; ++y) {
+            double x1 = path[y];
             double y1 = (y + 0.5) * dy;
-            
+
             int next_y = (y + 1) % n_grid_y;
-            double x2 = final_path_x[next_y];
+            double x2 = path[next_y];
             double y2 = (y + 1.5) * dy;
 
-            // Horizontal Line Fix:
-            // Do not draw segment if X jumps across boundary (wraps)
             double dist_x = std::abs(x2 - x1);
             if (dist_x < Lx * 0.5) {
-                 segs.push_back(x1); segs.push_back(y1);
-                 segs.push_back(x2); segs.push_back(y2);
+                segs.push_back(x1);
+                segs.push_back(y1);
+                segs.push_back(x2);
+                segs.push_back(y2);
             }
         }
         result[k] = std::move(segs);
@@ -2030,4 +2493,24 @@ std::vector<double> MDSimulation::get_density_profile(int n_bins_per_rank) {
     }
 
     return result;
+}
+
+
+void MDSimulation::save_env(const std::string& filename, const int step) {
+    // Only Rank 0 performs I/O
+    if (cfg_manager.config.rank_idx == 0) {
+        // Initialize writer if not already open
+        if (!particle_writer) {
+            // Try to open in append mode first (assuming trajectory accumulation)
+            // Your FileWriter throws if append=true and file doesn't exist.
+            try {
+                particle_writer = std::make_unique<FileWriter>(filename, true);
+            } catch (const std::exception&) {
+                // File likely doesn't exist, create new (append=false)
+                particle_writer = std::make_unique<FileWriter>(filename, false);
+            }
+        }
+        // h_particles is assumed to hold all particles on Rank 0 (gathered via sample_collect)
+        particle_writer->write_frame(h_particles.data(), h_particles.size(), step);
+    }
 }

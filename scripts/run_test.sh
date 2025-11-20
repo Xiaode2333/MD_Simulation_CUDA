@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=MD_Sim_test
 #SBATCH --partition=pi_co54
-#SBATCH --time=01:00:00
-#SBATCH --ntasks=4
+#SBATCH --time=1-00:00:00
+#SBATCH --ntasks=8
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --output=./results/test_%j.out
 
 module reset

@@ -1,6 +1,103 @@
 // md_config.cpp
 #include "md_config.hpp"
 
+namespace {
+void load_from_json_object(const json& j, MDConfig& cfg) {
+    // Start from struct defaults (value-initialized, so in-class defaults are kept)
+    MDConfig defaults{};
+
+    // Global params
+    cfg.n_particles_global  = j.value("n_particles_global",  defaults.n_particles_global);
+    cfg.n_particles_type0   = j.value("n_particles_type0",   defaults.n_particles_type0);
+    cfg.box_w_global        = j.value("box_w_global",        defaults.box_w_global);
+    cfg.box_h_global        = j.value("box_h_global",        defaults.box_h_global);
+    cfg.T_init              = j.value("T_init",              defaults.T_init);
+    cfg.T_target            = j.value("T_target",            defaults.T_target);
+
+    cfg.SIGMA_AA            = j.value("SIGMA_AA",            defaults.SIGMA_AA);
+    cfg.SIGMA_BB            = j.value("SIGMA_BB",            defaults.SIGMA_BB);
+    cfg.SIGMA_AB            = j.value("SIGMA_AB",            defaults.SIGMA_AB);
+
+    cfg.EPSILON_AA          = j.value("EPSILON_AA",          defaults.EPSILON_AA);
+    cfg.EPSILON_BB          = j.value("EPSILON_BB",          defaults.EPSILON_BB);
+    cfg.EPSILON_AB          = j.value("EPSILON_AB",          defaults.EPSILON_AB);
+
+    cfg.MASS_A              = j.value("MASS_A",              defaults.MASS_A);
+    cfg.MASS_B              = j.value("MASS_B",              defaults.MASS_B);
+
+    cfg.devide_p            = j.value("devide_p",            defaults.devide_p);
+    cfg.dt                  = j.value("dt",                  defaults.dt);
+    cfg.Q                   = j.value("Q",                   defaults.Q);
+    cfg.save_dt_interval    = j.value("save_dt_interval",    defaults.save_dt_interval);
+    cfg.cutoff              = j.value("cutoff",              defaults.cutoff);
+
+    cfg.run_name            = j.value("run_name",            defaults.run_name);
+    cfg.load_name           = j.value("load_name",           defaults.load_name);
+
+    cfg.THREADS_PER_BLOCK   = j.value("THREADS_PER_BLOCK",   defaults.THREADS_PER_BLOCK);
+    cfg.rank_size           = j.value("rank_size",           defaults.rank_size);
+
+    // This rank params (optional in JSON, so they default to struct values)
+    cfg.rank_idx            = j.value("rank_idx",            defaults.rank_idx);
+    cfg.n_local             = j.value("n_local",             defaults.n_local);
+    cfg.n_halo_left         = j.value("n_halo_left",         defaults.n_halo_left);
+    cfg.n_halo_right        = j.value("n_halo_right",        defaults.n_halo_right);
+    cfg.n_cap               = j.value("n_cap",               defaults.n_cap);
+    cfg.halo_left_cap       = j.value("halo_left_cap",       defaults.halo_left_cap);
+    cfg.halo_right_cap      = j.value("halo_right_cap",      defaults.halo_right_cap);
+    cfg.left_rank           = j.value("left_rank",           defaults.left_rank);
+    cfg.right_rank          = j.value("right_rank",          defaults.right_rank);
+    cfg.x_min               = j.value("x_min",               defaults.x_min);
+    cfg.x_max               = j.value("x_max",               defaults.x_max);
+}
+
+void store_to_json_object(json& j, const MDConfig& cfg) {
+    // Global params
+    j["n_particles_global"]  = cfg.n_particles_global;
+    j["n_particles_type0"]   = cfg.n_particles_type0;
+    j["box_w_global"]        = cfg.box_w_global;
+    j["box_h_global"]        = cfg.box_h_global;
+    j["T_init"]              = cfg.T_init;
+    j["T_target"]            = cfg.T_target;
+
+    j["SIGMA_AA"]            = cfg.SIGMA_AA;
+    j["SIGMA_BB"]            = cfg.SIGMA_BB;
+    j["SIGMA_AB"]            = cfg.SIGMA_AB;
+
+    j["EPSILON_AA"]          = cfg.EPSILON_AA;
+    j["EPSILON_BB"]          = cfg.EPSILON_BB;
+    j["EPSILON_AB"]          = cfg.EPSILON_AB;
+
+    j["MASS_A"]              = cfg.MASS_A;
+    j["MASS_B"]              = cfg.MASS_B;
+
+    j["devide_p"]            = cfg.devide_p;
+    j["dt"]                  = cfg.dt;
+    j["Q"]                   = cfg.Q;
+    j["save_dt_interval"]    = cfg.save_dt_interval;
+    j["cutoff"]              = cfg.cutoff;
+
+    j["run_name"]            = cfg.run_name;
+    j["load_name"]           = cfg.load_name;
+
+    j["THREADS_PER_BLOCK"]   = cfg.THREADS_PER_BLOCK;
+    j["rank_size"]           = cfg.rank_size;
+
+    // This rank params
+    j["rank_idx"]            = cfg.rank_idx;
+    j["n_local"]             = cfg.n_local;
+    j["n_halo_left"]         = cfg.n_halo_left;
+    j["n_halo_right"]        = cfg.n_halo_right;
+    j["n_cap"]               = cfg.n_cap;
+    j["halo_left_cap"]       = cfg.halo_left_cap;
+    j["halo_right_cap"]      = cfg.halo_right_cap;
+    j["left_rank"]           = cfg.left_rank;
+    j["right_rank"]          = cfg.right_rank;
+    j["x_min"]               = cfg.x_min;
+    j["x_max"]               = cfg.x_max;
+}
+} // namespace
+
 MDConfigManager::MDConfigManager(MDConfig config){
     this->config = config;
 }
@@ -94,52 +191,8 @@ MDConfigManager MDConfigManager::config_from_json(const std::string& filepath)
     json j;
     in >> j;
 
-    // Start from struct defaults (value-initialized, so in-class defaults are kept)
     MDConfig cfg{};
-
-    // Global params
-    cfg.n_particles_global  = j.value("n_particles_global",  cfg.n_particles_global);
-    cfg.n_particles_type0   = j.value("n_particles_type0",   cfg.n_particles_type0);
-    cfg.box_w_global        = j.value("box_w_global",        cfg.box_w_global);
-    cfg.box_h_global        = j.value("box_h_global",        cfg.box_h_global);
-    cfg.T_init              = j.value("T_init",              cfg.T_init);
-    cfg.T_target            = j.value("T_target",            cfg.T_target);
-
-    cfg.SIGMA_AA            = j.value("SIGMA_AA",            cfg.SIGMA_AA);
-    cfg.SIGMA_BB            = j.value("SIGMA_BB",            cfg.SIGMA_BB);
-    cfg.SIGMA_AB            = j.value("SIGMA_AB",            cfg.SIGMA_AB);
-
-    cfg.EPSILON_AA          = j.value("EPSILON_AA",          cfg.EPSILON_AA);
-    cfg.EPSILON_BB          = j.value("EPSILON_BB",          cfg.EPSILON_BB);
-    cfg.EPSILON_AB          = j.value("EPSILON_AB",          cfg.EPSILON_AB);
-
-    cfg.MASS_A              = j.value("MASS_A",              cfg.MASS_A);
-    cfg.MASS_B              = j.value("MASS_B",              cfg.MASS_B);
-
-    cfg.devide_p            = j.value("devide_p",            cfg.devide_p);
-    cfg.dt                  = j.value("dt",                  cfg.dt);
-    cfg.Q                   = j.value("Q",                   cfg.Q);
-    cfg.save_dt_interval    = j.value("save_dt_interval",    cfg.save_dt_interval);
-    cfg.cutoff              = j.value("cutoff",              cfg.cutoff);
-
-    cfg.run_name            = j.value("run_name",            cfg.run_name);
-    cfg.load_name           = j.value("load_name",           cfg.load_name);
-
-    cfg.THREADS_PER_BLOCK   = j.value("THREADS_PER_BLOCK",   cfg.THREADS_PER_BLOCK);
-    cfg.rank_size           = j.value("rank_size",           cfg.rank_size);
-
-    // This rank params (optional in JSON, so they default to struct values)
-    cfg.rank_idx            = j.value("rank_idx",            cfg.rank_idx);
-    cfg.n_local             = j.value("n_local",             cfg.n_local);
-    cfg.n_halo_left         = j.value("n_halo_left",         cfg.n_halo_left);
-    cfg.n_halo_right        = j.value("n_halo_right",        cfg.n_halo_right);
-    cfg.n_cap               = j.value("n_cap",               cfg.n_cap);
-    cfg.halo_left_cap       = j.value("halo_left_cap",       cfg.halo_left_cap);
-    cfg.halo_right_cap      = j.value("halo_right_cap",      cfg.halo_right_cap);
-    cfg.left_rank           = j.value("left_rank",           cfg.left_rank);
-    cfg.right_rank          = j.value("right_rank",          cfg.right_rank);
-    cfg.x_min               = j.value("x_min",               cfg.x_min);
-    cfg.x_max               = j.value("x_max",               cfg.x_max);
+    load_from_json_object(j, cfg);
 
     return MDConfigManager(cfg);
 }
@@ -148,50 +201,7 @@ MDConfigManager MDConfigManager::config_from_json(const std::string& filepath)
 void MDConfigManager::config_to_json(const std::string& filepath)
 {
     json j;
-
-    // Global params
-    j["n_particles_global"]  = config.n_particles_global;
-    j["n_particles_type0"]   = config.n_particles_type0;
-    j["box_w_global"]        = config.box_w_global;
-    j["box_h_global"]        = config.box_h_global;
-    j["T_init"]              = config.T_init;
-    j["T_target"]            = config.T_target;
-
-    j["SIGMA_AA"]            = config.SIGMA_AA;
-    j["SIGMA_BB"]            = config.SIGMA_BB;
-    j["SIGMA_AB"]            = config.SIGMA_AB;
-
-    j["EPSILON_AA"]          = config.EPSILON_AA;
-    j["EPSILON_BB"]          = config.EPSILON_BB;
-    j["EPSILON_AB"]          = config.EPSILON_AB;
-
-    j["MASS_A"]              = config.MASS_A;
-    j["MASS_B"]              = config.MASS_B;
-
-    j["devide_p"]            = config.devide_p;
-    j["dt"]                  = config.dt;
-    j["Q"]                   = config.Q;
-    j["save_dt_interval"]    = config.save_dt_interval;
-    j["cutoff"]              = config.cutoff;
-
-    j["run_name"]            = config.run_name;
-    j["load_name"]           = config.load_name;
-
-    j["THREADS_PER_BLOCK"]   = config.THREADS_PER_BLOCK;
-    j["rank_size"]           = config.rank_size;
-
-    // This rank params
-    j["rank_idx"]            = config.rank_idx;
-    j["n_local"]             = config.n_local;
-    j["n_halo_left"]         = config.n_halo_left;
-    j["n_halo_right"]        = config.n_halo_right;
-    j["n_cap"]               = config.n_cap;
-    j["halo_left_cap"]       = config.halo_left_cap;
-    j["halo_right_cap"]      = config.halo_right_cap;
-    j["left_rank"]           = config.left_rank;
-    j["right_rank"]          = config.right_rank;
-    j["x_min"]               = config.x_min;
-    j["x_max"]               = config.x_max;
+    store_to_json_object(j, config);
 
     std::ofstream out(filepath);
     if (!out.is_open()) {
@@ -199,4 +209,15 @@ void MDConfigManager::config_to_json(const std::string& filepath)
     }
 
     out << j.dump(4) << std::endl;
+}
+
+std::string MDConfigManager::serialize() const {
+    json j;
+    store_to_json_object(j, config);
+    return j.dump();
+}
+
+void MDConfigManager::deserialize(const std::string& data) {
+    auto j = json::parse(data);
+    load_from_json_object(j, config);
 }

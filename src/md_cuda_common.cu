@@ -1,5 +1,7 @@
 #include "md_cuda_common.hpp"
 #include "md_particle.hpp"
+#include <thrust/fill.h>
+#include <thrust/device_vector.h>
 
 __global__ void mark_halo_kernel(const Particle* particles,
                                  int n_local,
@@ -519,3 +521,4 @@ __global__ void local_density_profile_kernel(const Particle* __restrict__ partic
         }
     }
 }
+
