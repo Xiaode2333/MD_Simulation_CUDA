@@ -2,9 +2,10 @@
 """Average CWA snapshots and plot aggregated C(q) fit and gamma time series.
 
 Reads a CSV like tests/cwa_test/sample_csv/cwa_instant.csv (rows of key,value pairs),
-computes mode-wise averages of C(q) and |h_q|^2, performs a linear regression of
-average C(q) vs q^2 to estimate gamma, and plots both the averaged fit and the
-per-step gamma values.
+computes mode-wise averages of S(q)=|h_q|^2, reconstructs C(q)=k_B T/(L_y S(q))
+from the averaged S(q) (instead of averaging C(q) directly), performs a linear
+regression of this reconstructed C(q) vs q^2 to estimate gamma, and plots both
+the averaged fit and the per-step gamma values.
 """
 from __future__ import annotations
 
@@ -41,23 +42,55 @@ def load_rows(path: Path) -> List[Dict[str, float]]:
 
 
 def linear_regression(x: List[float], y: List[float]) -> Tuple[float, float]:
+    """Linear regression with intercept forced to zero.
+
+    Fits y ≈ slope * x, i.e., the regression line is constrained to pass
+    through (0, 0). Returns (slope, intercept) where intercept is always 0.
+    """
     valid = [
         (xi, yi)
         for xi, yi in zip(x, y)
         if math.isfinite(xi) and math.isfinite(yi)
     ]
-    if len(valid) < 2:
+    if len(valid) < 1:
         return float("nan"), float("nan")
-    xs, ys = zip(*valid)
-    mean_x = sum(xs) / len(xs)
-    mean_y = sum(ys) / len(ys)
-    num = sum((xi - mean_x) * (yi - mean_y) for xi, yi in valid)
-    den = sum((xi - mean_x) ** 2 for xi, _ in valid)
+    num = sum(xi * yi for xi, yi in valid)
+    den = sum(xi * xi for xi, _ in valid)
     if den <= 1e-16:
         return float("nan"), float("nan")
     slope = num / den
-    intercept = mean_y - slope * mean_x
+    intercept = 0.0
     return slope, intercept
+
+
+def estimate_prefactor(rows: List[Dict[str, float]]) -> float:
+    """Estimate k_B T / L_y from instantaneous C(q) and S(q) data.
+
+    From the simulation, C(q) is computed as C(q) = T / (L_y * S(q)) (k_B=1),
+    so T / L_y = C(q) * S(q). We average C(q) * S(q) over all available
+    modes and snapshots to get a robust estimate of this prefactor.
+    """
+    prefactor_sum = 0.0
+    prefactor_count = 0.0
+    for row in rows:
+        for key, c_val in row.items():
+            if not key.startswith("Cq_"):
+                continue
+            if not math.isfinite(c_val):
+                continue
+            mode = int(key[len("Cq_") :])
+            s_key = f"S_q_{mode}"
+            h_key = f"hq_sq_{mode}"
+            s_val = row.get(s_key)
+            if s_val is None:
+                s_val = row.get(h_key)
+            if s_val is None or not math.isfinite(s_val) or s_val <= 0.0:
+                continue
+            prefactor_sum += c_val * s_val
+            prefactor_count += 1.0
+    if prefactor_count <= 0.0:
+        return float("nan")
+    return prefactor_sum / prefactor_count
 
 
 def aggregate_modes(rows: List[Dict[str, float]]):
@@ -124,7 +157,7 @@ def plot_average_cwa(
 
     fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(10, 4.5))
 
-    ax_left.plot(q2, avg_cq, "o", label="avg C(q)")
+    ax_left.plot(q2, avg_cq, "o", label="C(q) from avg S(q)")
     if math.isfinite(gamma_avg):
         x_min, x_max = min(q2), max(q2)
         x_line = [x_min, x_max]
@@ -138,7 +171,12 @@ def plot_average_cwa(
 
     ax_right.plot(steps, gammas, marker="o", linestyle="-", label="gamma per step")
     if math.isfinite(gamma_avg):
-        ax_right.axhline(gamma_avg, color="tab:orange", linestyle="--", label="avg C(q) fit gamma")
+        ax_right.axhline(
+            gamma_avg,
+            color="tab:orange",
+            linestyle="--",
+            label="C(q) from avg S(q) fit",
+        )
     ax_right.set_xlabel("step")
     ax_right.set_ylabel(r"$\gamma$")
     ax_right.set_title("Gamma time series")
@@ -151,13 +189,13 @@ def plot_average_cwa(
     plt.close(fig)
 
     if math.isfinite(gamma_avg):
-        print(f"Average gamma from C(q) fit: {gamma_avg:.6f}, C0={c0_avg:.6e}")
+        print(f"Average gamma from C(q) (via avg S(q)) fit: {gamma_avg:.6f}, C0={c0_avg:.6e}")
     else:
         print("Unable to determine average gamma (insufficient data)")
 
     for mode, q2_val, hq2_val, cq_val in zip(modes, q2, avg_hq2, avg_cq):
         print(
-            f"mode {mode:2d}: q^2={q2_val:.6f}, avg |h_q|^2={hq2_val:.6e}, avg C(q)={cq_val:.6e}"
+            f"mode {mode:2d}: q^2={q2_val:.6f}, avg |h_q|^2={hq2_val:.6e}, C(q) from avg S(q)={cq_val:.6e}"
         )
 
     # Write summary CSV for downstream analysis
@@ -195,11 +233,31 @@ def main() -> None:
     output_csv_path = Path(args.out_csv_path).expanduser()
 
     rows = load_rows(input_path)
-    modes, q2_vals, avg_hq2, avg_cq = aggregate_modes(rows)
+    prefactor = estimate_prefactor(rows)
+    modes, q2_vals, avg_hq2, _avg_cq_raw = aggregate_modes(rows)
     if not modes:
         raise ValueError("No modes found in input for averaging")
 
-    plot_average_cwa(input_path, output_svg_path, output_csv_path, rows, modes, q2_vals, avg_hq2, avg_cq)
+    # Reconstruct C(q) from the averaged S(q) using C(q) = (T / L_y) / <S(q)>,
+    # where T / L_y is estimated from instantaneous C(q) and S(q).
+    if math.isfinite(prefactor):
+        avg_cq_from_s = [
+            (prefactor / hq2 if math.isfinite(hq2) and hq2 > 0.0 else float("nan"))
+            for hq2 in avg_hq2
+        ]
+    else:
+        avg_cq_from_s = [float("nan")] * len(avg_hq2)
+
+    plot_average_cwa(
+        input_path,
+        output_svg_path,
+        output_csv_path,
+        rows,
+        modes,
+        q2_vals,
+        avg_hq2,
+        avg_cq_from_s,
+    )
 
 
 if __name__ == "__main__":

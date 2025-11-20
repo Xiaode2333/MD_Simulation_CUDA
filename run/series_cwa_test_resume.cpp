@@ -189,23 +189,26 @@ int main(int argc, char** argv) {
         n_record_interval = 1;
     }
 
-    const int n_steps = 2000000;
+    const int n_steps = 1000000;
     const int q_min = 3;
     const int q_max = 10;
     const int n_bins_per_rank = 16;
+    const int n_last_env_step = n_steps - n_record_interval;
 
     fs::path base_dir = fs::path(options.base_dir);
-    fs::path cwa_plot_dir = base_dir / "cwa_plot";
+    fs::path cwa_plot_dir = base_dir / "cwa_plot_resumed";
     fs::path cwa_plot_csv_dir = cwa_plot_dir / "csv";
-    fs::path sample_dir = base_dir / "sample_csv";
+    fs::path sample_dir = base_dir / "sample_csv_resumed";
     fs::path cwa_sample_csv = sample_dir / "cwa_instant.csv";
     fs::path U_K_tot_csv_path = sample_dir / "U_K_tot_log.csv";
-    fs::path interface_dir = base_dir / "interfaces";
+    fs::path interface_dir = base_dir / "interfaces_resumed";
     fs::path interface_csv_dir = interface_dir / "csv";
-    fs::path density_dir = base_dir / "density_profile";
-    fs::path saved_env_dir = base_dir / "saved_env";
+    fs::path density_dir = base_dir / "density_profile_resumed";
+    fs::path load_env_dir = base_dir / "saved_env";
+    fs::path load_env_file = load_env_dir / "saved_env.bin";
+    fs::path saved_env_dir = base_dir / "saved_env_resumed";
     fs::path saved_env_file = saved_env_dir / "saved_env.bin";
-    fs::path saved_cfg_path = base_dir / "config.json";
+    fs::path saved_cfg_path = base_dir / "config_resumed.json";
 
     std::vector<fs::path> dirs_to_create = {
         base_dir,
@@ -238,7 +241,7 @@ int main(int argc, char** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
 
     {
-        MDSimulation sim(cfg_mgr, MPI_COMM_WORLD);
+        MDSimulation sim(cfg_mgr, MPI_COMM_WORLD, load_env_file, n_last_env_step);
 
         RankZeroPrint(rank_idx, "[series_cwa_test] Waiting for MPI_Barrier before stepping.\n");
         MPI_Barrier(MPI_COMM_WORLD);
@@ -264,12 +267,10 @@ int main(int argc, char** argv) {
                 fs::path interface_csv_path = interface_csv_dir / fmt::format("interface_step_{}.csv", step);
                 sim.plot_interfaces(interface_plot_path.string(), interface_csv_path.string(), density_profile);
 
-                if (n_steps > 1000000) {
-                    fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
-                    fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
-                    sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);
-                    append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx);
-                } 
+                fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
+                fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
+                sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);
+                append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx);
             }
 
             if (step % 100 == 0) {

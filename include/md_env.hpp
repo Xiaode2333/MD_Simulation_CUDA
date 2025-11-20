@@ -120,7 +120,7 @@ class MDSimulation {
 
         static constexpr double kEquilibriumWindowTime = 100.0;
         static constexpr int kBaseRequiredPasses = 3;
-        static constexpr double kBasePValue = 0.05;
+        static constexpr double kBasePValue = 0.2;
 
         void broadcast_params();
         void allocate_memory();

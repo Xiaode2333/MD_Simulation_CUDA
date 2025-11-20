@@ -10,7 +10,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 <base_dir> <ori_config> [DT_init=0.1 Ddt=1e-4 ...]" >&2
+    echo "Usage: $0 <base_dir> <ori_config> DT_init=0.1 Ddt=1e-4 ..." >&2
     exit 1
 fi
 
@@ -68,7 +68,7 @@ cmake -B build -S . \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build build -j
 
-SERIES_BIN="./build/run_series_cwa_test"
+SERIES_BIN="./build/run_series_cwa_test_resume"
 if [ ! -x "$SERIES_BIN" ]; then
     echo "[ERROR] $SERIES_BIN was not produced." >&2
     exit 2
