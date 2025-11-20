@@ -37,3 +37,4 @@ __pycache__/
 *.csv
 /tmp/
 .vscode/
+*.bin
