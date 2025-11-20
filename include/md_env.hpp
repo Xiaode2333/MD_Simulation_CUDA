@@ -34,6 +34,9 @@ class MDSimulation {
         
         double cal_total_K();
         double cal_total_U();
+        double deform(double epsilon, double U_old);
+        double get_Lx() const { return cfg_manager.config.box_w_global; }
+        double get_Ly() const { return cfg_manager.config.box_h_global; }
         
         void step_single_NVE();
         void step_single_nose_hoover();
@@ -110,6 +113,8 @@ class MDSimulation {
         thrust::device_vector<Particle> d_keep;
 
         double xi; //xi for nose hoover
+        double Lx0;
+        double Ly0;
 
         double record_interval_dt;
         double next_record_time;

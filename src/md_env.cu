@@ -23,6 +23,8 @@ MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm) {
     std::fflush(stdout); // FORCE FLUSH
     
     broadcast_params();
+    Lx0 = cfg_manager.config.box_w_global;
+    Ly0 = cfg_manager.config.box_h_global;
     init_equilibrium_tracker();
     
     fmt::print("Params broadcasted.\n");
@@ -73,6 +75,8 @@ MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm, const 
     xi = 0.0;
 
     broadcast_params();
+    Lx0 = cfg_manager.config.box_w_global;
+    Ly0 = cfg_manager.config.box_h_global;
     init_equilibrium_tracker();
     RankZeroPrint("Params broadcasted.\n");
 
@@ -1723,6 +1727,72 @@ double MDSimulation::cal_total_U() {
     double       U_global = 0.0;
     MPI_Allreduce(&U_local, &U_global, 1, MPI_DOUBLE, MPI_SUM, comm);
     return U_global;
+}
+
+double MDSimulation::deform(double epsilon, double U_old) {
+    int world_rank = 0;
+    int world_size = 0;
+    MPI_Comm_rank(comm, &world_rank);
+    MPI_Comm_size(comm, &world_size);
+
+    if (world_size != cfg_manager.config.rank_size) {
+        fmt::print(stderr,
+                   "[deform] world_size={} != rank_size={}.\n",
+                   world_size, cfg_manager.config.rank_size);
+        MPI_Abort(comm, 1);
+    }
+
+    if (world_rank != cfg_manager.config.rank_idx) {
+        fmt::print(stderr,
+                   "[deform] world_rank={} != rank_idx={}.\n",
+                   world_rank, cfg_manager.config.rank_idx);
+        MPI_Abort(comm, 1);
+    }
+
+    const double stretch = 1.0 + epsilon;
+    if (stretch <= 0.0) {
+        fmt::print(stderr, "[deform] Invalid stretch factor {} (epsilon = {}).\n", stretch, epsilon);
+        MPI_Abort(comm, 1);
+    }
+
+    const double Lx_old = cfg_manager.config.box_w_global;
+    const double Ly_old = cfg_manager.config.box_h_global;
+
+    const double Lx_new = Lx0 * stretch;
+    const double Ly_new = Ly0 / stretch;
+
+    const double dLx = Lx_new - Lx_old;
+    const double dLy = Ly_new - Ly_old;
+
+    if (cfg_manager.config.rank_idx == 0) {
+        const int N_global = cfg_manager.config.n_particles_global;
+        if (static_cast<int>(h_particles.size()) < N_global) {
+            fmt::print(stderr,
+                       "[deform] h_particles size={} < n_particles_global={}.\n",
+                       h_particles.size(), N_global);
+            MPI_Abort(comm, 1);
+        }
+        for (int i = 0; i < N_global; ++i) {
+            h_particles[i].pos.x = pbc_wrap_hd(h_particles[i].pos.x + 0.5 * dLx, Lx_new);
+            h_particles[i].pos.y = pbc_wrap_hd(h_particles[i].pos.y + 0.5 * dLy, Ly_new);
+        }
+
+        cfg_manager.config.box_w_global = Lx_new;
+        cfg_manager.config.box_h_global = Ly_new;
+    }
+
+    // Refresh derived domain parameters on all ranks.
+    broadcast_params();
+
+    // Redistribute particles across ranks and rebuild device state for the new box.
+    distribute_particles_h2d();
+    update_halo();
+    cal_forces();
+    update_halo();
+    collect_particles_d2h();
+
+    const double U_new = cal_total_U();
+    return U_new - U_old;
 }
 
 bool MDSimulation::check_eqlibrium(double sensitivity) {

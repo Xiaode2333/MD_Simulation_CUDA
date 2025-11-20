@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -28,7 +29,7 @@ bool create_folder(const fs::path& path, int rank_idx) {
     if (!fs::exists(path, ec)) {
         fs::create_directories(path, ec);
         if (ec) {
-            fmt::print(stderr, "[series_cwa_test] Failed to create dir {}. Error: {}\n", path.string(), ec.message());
+            fmt::print(stderr, "[series_strain_test] Failed to create dir {}. Error: {}\n", path.string(), ec.message());
             return false;
         }
     }
@@ -40,7 +41,7 @@ bool append_latest_line(const fs::path& src, const fs::path& dst, int rank_idx) 
 
     std::ifstream in(src);
     if (!in) {
-        fmt::print(stderr, "[series_cwa_test] Failed to open {} for reading.\n", src.string());
+        fmt::print(stderr, "[series_strain_test] Failed to open {} for reading.\n", src.string());
         return false;
     }
 
@@ -53,13 +54,13 @@ bool append_latest_line(const fs::path& src, const fs::path& dst, int rank_idx) 
     }
 
     if (last_non_empty.empty()) {
-        fmt::print(stderr, "[series_cwa_test] No data found in {}.\n", src.string());
+        fmt::print(stderr, "[series_strain_test] No data found in {}.\n", src.string());
         return false;
     }
 
     std::ofstream out(dst, std::ios::out | std::ios::app);
     if (!out) {
-        fmt::print(stderr, "[series_cwa_test] Failed to open {} for appending.\n", dst.string());
+        fmt::print(stderr, "[series_strain_test] Failed to open {} for appending.\n", dst.string());
         return false;
     }
 
@@ -74,7 +75,7 @@ void write_density_profile_csv(const fs::path& filepath, const std::vector<doubl
 
     std::ofstream out(filepath, std::ios::out | std::ios::trunc);
     if (!out) {
-        fmt::print(stderr, "[series_cwa_test] Failed to open {} for writing density profile.\n", filepath.string());
+        fmt::print(stderr, "[series_strain_test] Failed to open {} for writing density profile.\n", filepath.string());
         return;
     }
 
@@ -161,7 +162,7 @@ int main(int argc, char** argv) {
     try {
         options = parse_args(argc, argv);
     } catch (const std::exception& ex) {
-        fmt::print(stderr, "[series_cwa_test] {}\n", ex.what());
+        fmt::print(stderr, "[series_strain_test] {}\n", ex.what());
         return 1;
     }
 
@@ -177,7 +178,7 @@ int main(int argc, char** argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &rank_size);
 
     if (cfg_mgr.config.rank_size != rank_size) {
-        fmt::print(stderr, "[series_cwa_test] rank size = {} doesn't match config.\n", rank_size);
+        fmt::print(stderr, "[series_strain_test] rank size = {} doesn't match config.\n", rank_size);
         MPI_Abort(MPI_COMM_WORLD, 2);
     }
 
@@ -189,7 +190,11 @@ int main(int argc, char** argv) {
         n_record_interval = 1;
     }
 
-    const int n_steps = 2000000;
+    const int n_steps = 8000000;
+    const int n_steps_strain_eq = 50000;
+    const int n_steps_sample = 100000;
+    const int n_loop = n_steps_strain_eq + n_steps_sample;
+    const int n_step_pre_eq = 500000;
     const int q_min = 3;
     const int q_max = 10;
     const int n_bins_per_rank = 16;
@@ -200,6 +205,7 @@ int main(int argc, char** argv) {
     fs::path sample_dir = base_dir / "sample_csv";
     fs::path cwa_sample_csv = sample_dir / "cwa_instant.csv";
     fs::path U_K_tot_csv_path = sample_dir / "U_K_tot_log.csv";
+    fs::path strain_log_csv_path = sample_dir / "strain_log.csv";
     fs::path interface_dir = base_dir / "interfaces";
     fs::path interface_csv_dir = interface_dir / "csv";
     fs::path density_dir = base_dir / "density_profile";
@@ -227,8 +233,9 @@ int main(int argc, char** argv) {
     if (rank_idx == 0) {
         std::ofstream clear_samples(cwa_sample_csv, std::ios::out | std::ios::trunc);
         std::ofstream clear_uk(U_K_tot_csv_path, std::ios::out | std::ios::trunc);
-        if (!clear_samples || !clear_uk) {
-            fmt::print(stderr, "[series_cwa_test] Failed to initialize CSV outputs in {}.\n", sample_dir.string());
+        std::ofstream clear_strain(strain_log_csv_path, std::ios::out | std::ios::trunc);
+        if (!clear_samples || !clear_uk || !clear_strain) {
+            fmt::print(stderr, "[series_strain_test] Failed to initialize CSV outputs in {}.\n", sample_dir.string());
             MPI_Abort(MPI_COMM_WORLD, 4);
         }
         cfg_mgr.config_to_json(saved_cfg_path.string());
@@ -240,12 +247,24 @@ int main(int argc, char** argv) {
     {
         MDSimulation sim(cfg_mgr, MPI_COMM_WORLD);
 
-        RankZeroPrint(rank_idx, "[series_cwa_test] Waiting for MPI_Barrier before stepping.\n");
+        RankZeroPrint(rank_idx, "[series_strain_test] Waiting for MPI_Barrier before stepping.\n");
         MPI_Barrier(MPI_COMM_WORLD);
-        RankZeroPrint(rank_idx, "[series_cwa_test] Starting simulation loop.\n");
+        RankZeroPrint(rank_idx, "[series_strain_test] Starting simulation loop.\n");
 
         for (int step = 0; step < n_steps; ++step) {
             sim.step_single_nose_hoover();
+
+            if (step > n_step_pre_eq && ((step - n_step_pre_eq) % n_loop == 0)) {
+                sim.sample_collect();
+                const double U_old = sim.cal_total_U();
+                const double epsilon = 1e-2;
+                const double dU = sim.deform(epsilon, U_old);
+                const double Lx_new = sim.get_Lx();
+                const double Ly_new = sim.get_Ly();
+                sim.write_to_file(strain_log_csv_path.string(),
+                                  "step, {}, epsilon, {}, Lx, {}, Ly, {}, dU, {}\n",
+                                  step, epsilon, Lx_new, Ly_new, dU);
+            }
 
             if (step % n_record_interval == 0) {
                 sim.sample_collect();
@@ -254,17 +273,39 @@ int main(int argc, char** argv) {
 
                 const double U_tot = sim.cal_total_U();
                 const double K_tot = sim.cal_total_K();
-                sim.write_to_file(U_K_tot_csv_path.string(), "U_tot, {}, K_tot, {}, step, {}\n", U_tot, K_tot, step);
+                const double Lx = sim.get_Lx();
+                const double Ly = sim.get_Ly();
 
-                const auto density_profile = sim.get_density_profile(n_bins_per_rank);
-                fs::path density_step_csv = density_dir / fmt::format("density_step_{}.csv", step);
-                write_density_profile_csv(density_step_csv, density_profile, rank_idx);
+                double L_interface_tot = 0.0;
+                int n_grid_y = static_cast<int>(Ly / 2.0);
+                if (n_grid_y < 10) n_grid_y = 10;
+                const auto interfaces = sim.get_smooth_interface(n_grid_y, 2.0);
+                for (const auto& segs : interfaces) {
+                    for (std::size_t idx = 0; idx + 3 < segs.size(); idx += 4) {
+                        double dx = segs[idx + 2] - segs[idx];
+                        if (dx > 0.5 * Lx) dx -= Lx;
+                        if (dx < -0.5 * Lx) dx += Lx;
+                        double dy = segs[idx + 3] - segs[idx + 1];
+                        L_interface_tot += std::sqrt(dx * dx + dy * dy);
+                    }
+                }
 
-                fs::path interface_plot_path = interface_dir / fmt::format("interface_step_{}.svg", step);
-                fs::path interface_csv_path = interface_csv_dir / fmt::format("interface_step_{}.csv", step);
-                sim.plot_interfaces(interface_plot_path.string(), interface_csv_path.string(), density_profile);
+                sim.write_to_file(U_K_tot_csv_path.string(),
+                                  "Lx, {}, Ly, {}, L_interface_tot, {}, U_tot, {}, K_tot, {}, step, {}\n",
+                                  Lx, Ly, L_interface_tot, U_tot, K_tot, step);
 
-                if (step > 1000000) {
+                if (step % (100*n_record_interval) == 0){
+                    const auto density_profile = sim.get_density_profile(n_bins_per_rank);
+                    fs::path density_step_csv = density_dir / fmt::format("density_step_{}.csv", step);
+                    write_density_profile_csv(density_step_csv, density_profile, rank_idx);
+
+                    fs::path interface_plot_path = interface_dir / fmt::format("interface_step_{}.svg", step);
+                    fs::path interface_csv_path = interface_csv_dir / fmt::format("interface_step_{}.csv", step);
+                    sim.plot_interfaces(interface_plot_path.string(), interface_csv_path.string(), density_profile);
+                }
+                
+
+                if (step > n_step_pre_eq) {
                     fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
                     fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
                     sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);
@@ -273,7 +314,7 @@ int main(int argc, char** argv) {
             }
 
             if (step % 100 == 0) {
-                RankZeroPrint(rank_idx, "[series_cwa_test] Step {}.\n", step);
+                RankZeroPrint(rank_idx, "[series_strain_test] Step {}.\n", step);
             }
         }
     }
