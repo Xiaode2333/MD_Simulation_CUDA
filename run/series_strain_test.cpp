@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -190,14 +191,16 @@ int main(int argc, char** argv) {
         n_record_interval = 1;
     }
 
-    const int n_steps = 8000000;
+    const int n_steps = 10000000;
     const int n_steps_strain_eq = 50000;
     const int n_steps_sample = 100000;
-    const int n_loop = n_steps_strain_eq + n_steps_sample;
-    const int n_step_pre_eq = 500000;
+    const int n_step_pre_eq = 1000000;
     const int q_min = 3;
     const int q_max = 10;
-    const int n_bins_per_rank = 16;
+    const int n_bins_per_rank = 32;
+    const double epsilon_target = 1e-2;
+    const double sigma_max = std::max({cfg_mgr.config.SIGMA_AA, cfg_mgr.config.SIGMA_AB, cfg_mgr.config.SIGMA_BB});
+    const double strain_displacement_ratio = 1e-3; // Lx * epsilon = 1e-3 * sigma_max
 
     fs::path base_dir = fs::path(options.base_dir);
     fs::path cwa_plot_dir = base_dir / "cwa_plot";
@@ -251,19 +254,58 @@ int main(int argc, char** argv) {
         MPI_Barrier(MPI_COMM_WORLD);
         RankZeroPrint(rank_idx, "[series_strain_test] Starting simulation loop.\n");
 
+        enum class StrainPhase { Deforming, Equilibrating, Sampling };
+        StrainPhase strain_phase = StrainPhase::Deforming;
+        double accumulated_epsilon = 0.0;
+        int strain_phase_step = 0;
+
         for (int step = 0; step < n_steps; ++step) {
             sim.step_single_nose_hoover();
 
-            if (step > n_step_pre_eq && ((step - n_step_pre_eq) % n_loop == 0)) {
-                sim.sample_collect();
-                const double U_old = sim.cal_total_U();
-                const double epsilon = 1e-2;
-                const double dU = sim.deform(epsilon, U_old);
-                const double Lx_new = sim.get_Lx();
-                const double Ly_new = sim.get_Ly();
-                sim.write_to_file(strain_log_csv_path.string(),
-                                  "step, {}, epsilon, {}, Lx, {}, Ly, {}, dU, {}\n",
-                                  step, epsilon, Lx_new, Ly_new, dU);
+            bool is_deforming = false;
+            if (step > n_step_pre_eq) {
+                switch (strain_phase) {
+                    case StrainPhase::Deforming: {
+                        const double Lx_current = sim.get_Lx();
+                        const double epsilon_step = strain_displacement_ratio * sigma_max / Lx_current;
+                        const double remaining = epsilon_target - accumulated_epsilon;
+                        const double epsilon = std::min(epsilon_step, remaining);
+
+                        if (epsilon > 0.0) {
+                            sim.sample_collect();
+                            const double U_old = sim.cal_total_U();
+                            const double dU = sim.deform(epsilon, U_old);
+                            const double Lx_new = sim.get_Lx();
+                            const double Ly_new = sim.get_Ly();
+                            accumulated_epsilon += epsilon;
+                            is_deforming = true;
+                            sim.write_to_file(strain_log_csv_path.string(),
+                                              "step, {}, epsilon, {}, Lx, {}, Ly, {}, dU, {}\n",
+                                              step, epsilon, Lx_new, Ly_new, dU);
+
+                            if (accumulated_epsilon >= epsilon_target) {
+                                strain_phase = StrainPhase::Equilibrating;
+                                strain_phase_step = 0;
+                            }
+                        }
+                        break;
+                    }
+                    case StrainPhase::Equilibrating:
+                        ++strain_phase_step;
+                        if (strain_phase_step >= n_steps_strain_eq) {
+                            strain_phase = StrainPhase::Sampling;
+                            strain_phase_step = 0;
+                        }
+                        break;
+                    case StrainPhase::Sampling:
+                        ++strain_phase_step;
+                        if (strain_phase_step >= n_steps_sample) {
+                            strain_phase = StrainPhase::Deforming;
+                            strain_phase_step = 0;
+                            accumulated_epsilon = 0.0;
+                        }
+                        break;
+                }
             }
 
             if (step % n_record_interval == 0) {
@@ -291,8 +333,8 @@ int main(int argc, char** argv) {
                 }
 
                 sim.write_to_file(U_K_tot_csv_path.string(),
-                                  "Lx, {}, Ly, {}, L_interface_tot, {}, U_tot, {}, K_tot, {}, step, {}\n",
-                                  Lx, Ly, L_interface_tot, U_tot, K_tot, step);
+                                  "Lx, {}, Ly, {}, L_interface_tot, {}, U_tot, {}, K_tot, {}, step, {}, is_deforming, {}\n",
+                                  Lx, Ly, L_interface_tot, U_tot, K_tot, step, (is_deforming ? 1 : 0));
 
                 if (step % (100*n_record_interval) == 0){
                     const auto density_profile = sim.get_density_profile(n_bins_per_rank);
@@ -305,16 +347,24 @@ int main(int argc, char** argv) {
                 }
                 
 
-                if (step > n_step_pre_eq) {
+                if (step > n_step_pre_eq && strain_phase == StrainPhase::Sampling) {
                     fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
                     fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
                     sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);
-                    append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx);
+                    if (fs::exists(cwa_step_csv)) {
+                        append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx);
+                    }
                 } 
             }
 
             if (step % 100 == 0) {
-                RankZeroPrint(rank_idx, "[series_strain_test] Step {}.\n", step);
+                const char* phase_str = "unknown";
+                switch (strain_phase) {
+                    case StrainPhase::Deforming: phase_str = "deforming"; break;
+                    case StrainPhase::Equilibrating: phase_str = "equilibrating"; break;
+                    case StrainPhase::Sampling: phase_str = "sampling"; break;
+                }
+                RankZeroPrint(rank_idx, "[series_strain_test] Step {}, phase: {}.\n", step, phase_str);
             }
         }
     }

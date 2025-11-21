@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=128G
-#SBATCH --output=./results/series_cwa_test_%j.out
+#SBATCH --output=./results/series_strain_test_%j.out
 
 set -euo pipefail
 
@@ -100,5 +100,5 @@ for override in "$@"; do
     fi
 done
 
-echo "Launching series_cwa_test with base dir '${BASE_DIR}' and config '${ORI_CONFIG}'."
+echo "Launching series_strain_test with base dir '${BASE_DIR}' and config '${ORI_CONFIG}'."
 srun --cpu-bind=none "$SERIES_BIN" --base-dir "$BASE_DIR" --ori-config "$ORI_CONFIG" "${override_cli[@]}"

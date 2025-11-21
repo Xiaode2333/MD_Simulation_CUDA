@@ -354,8 +354,8 @@ void MDSimulation::broadcast_params() {
     cfg_manager.config.right_rank = (world_rank + 1) % world_size;
 
     // Optional debug
-    fmt::print("[broadcast_params] Rank {}\n", world_rank);
-    std::fflush(stdout);
+    // fmt::print("[broadcast_params] Rank {}\n", world_rank);
+    // std::fflush(stdout);
 }
 
 void MDSimulation::allocate_memory(){
@@ -1758,8 +1758,9 @@ double MDSimulation::deform(double epsilon, double U_old) {
     const double Lx_old = cfg_manager.config.box_w_global;
     const double Ly_old = cfg_manager.config.box_h_global;
 
-    const double Lx_new = Lx0 * stretch;
-    const double Ly_new = Ly0 / stretch;
+    // Stretch relative to current box dimensions so sequential calls accumulate deformation.
+    const double Lx_new = Lx_old * stretch;
+    const double Ly_new = Ly_old / stretch;
 
     const double dLx = Lx_new - Lx_old;
     const double dLy = Ly_new - Ly_old;
