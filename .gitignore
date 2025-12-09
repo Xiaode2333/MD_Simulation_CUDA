@@ -26,7 +26,6 @@ compile_commands.json
 .ipynb_checkpoints/
 __pycache__/
 .mypy_cache/
-/.vscode/
 /vcpkg_installed/
 *.png
 *.svg
