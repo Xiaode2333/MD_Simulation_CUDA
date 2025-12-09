@@ -585,7 +585,8 @@ __global__ void cal_local_U_kernel(const Particle* __restrict__ particles,
     if (tid == 0) {
         partial_sums[blockIdx.x] = sdata[0];
     }
-    
+}
+
 __global__ void local_density_profile_kernel(const Particle* __restrict__ particles, int n_local, int n_bins_per_rank,
                                    double xmin, double xmax,
                                    int* count_A, int* count_B){
