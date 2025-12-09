@@ -1,6 +1,82 @@
 #include "md_common.hpp"
 #include "md_particle.hpp"
 
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <fmt/core.h>
+
+bool create_folder(const std::filesystem::path& path, int rank_idx) {
+    if (rank_idx != 0) {
+        return true;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        std::filesystem::create_directories(path, ec);
+        if (ec) {
+            fmt::print(stderr, "Failed to create dir {}. Error: {}\n", path.string(), ec.message());
+            return false;
+        }
+    }
+    return true;
+}
+
+bool append_latest_line(const std::filesystem::path& src,
+                        const std::filesystem::path& dst,
+                        int rank_idx,
+                        const std::string& tag) {
+    if (rank_idx != 0) return true;
+
+    std::ifstream in(src);
+    if (!in) {
+        fmt::print(stderr, "[{}] Failed to open {} for reading.\n", tag, src.string());
+        return false;
+    }
+
+    std::string line;
+    std::string last_non_empty;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            last_non_empty = line;
+        }
+    }
+
+    if (last_non_empty.empty()) {
+        fmt::print(stderr, "[{}] No data found in {}.\n", tag, src.string());
+        return false;
+    }
+
+    std::ofstream out(dst, std::ios::out | std::ios::app);
+    if (!out) {
+        fmt::print(stderr, "[{}] Failed to open {} for appending.\n", tag, dst.string());
+        return false;
+    }
+
+    out << last_non_empty << '\n';
+    return true;
+}
+
+void write_density_profile_csv(const std::filesystem::path& filepath,
+                               const std::vector<double>& density,
+                               int rank_idx,
+                               const std::string& tag) {
+    if (rank_idx != 0) {
+        return;
+    }
+
+    std::ofstream out(filepath, std::ios::out | std::ios::trunc);
+    if (!out) {
+        fmt::print(stderr, "[{}] Failed to open {} for writing density profile.\n", tag, filepath.string());
+        return;
+    }
+
+    out << "bin,rho\n";
+    for (std::size_t idx = 0; idx < density.size(); ++idx) {
+        out << idx << ',' << density[idx] << '\n';
+    }
+}
+
 void write_exact(std::FILE* fp, const void* buf, std::size_t bytes) {
     if (bytes == 0) {
         return;

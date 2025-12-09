@@ -11,79 +11,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-template <typename... Args>
-void RankZeroPrint(int rank_idx, fmt::format_string<Args...> format_str, Args&&... args) {
-    if (rank_idx == 0) {
-        fmt::print(format_str, std::forward<Args>(args)...);
-        std::fflush(stdout);
-    }
-}
-
-bool create_folder(const fs::path& path, int rank_idx) {
-    if (rank_idx != 0) {
-        return true;
-    }
-
-    std::error_code ec;
-    if (!fs::exists(path, ec)) {
-        fs::create_directories(path, ec);
-        if (ec) {
-            fmt::print(stderr, "[series_cwa_test] Failed to create dir {}. Error: {}\n", path.string(), ec.message());
-            return false;
-        }
-    }
-    return true;
-}
-
-bool append_latest_line(const fs::path& src, const fs::path& dst, int rank_idx) {
-    if (rank_idx != 0) return true;
-
-    std::ifstream in(src);
-    if (!in) {
-        fmt::print(stderr, "[series_cwa_test] Failed to open {} for reading.\n", src.string());
-        return false;
-    }
-
-    std::string line;
-    std::string last_non_empty;
-    while (std::getline(in, line)) {
-        if (!line.empty()) {
-            last_non_empty = line;
-        }
-    }
-
-    if (last_non_empty.empty()) {
-        fmt::print(stderr, "[series_cwa_test] No data found in {}.\n", src.string());
-        return false;
-    }
-
-    std::ofstream out(dst, std::ios::out | std::ios::app);
-    if (!out) {
-        fmt::print(stderr, "[series_cwa_test] Failed to open {} for appending.\n", dst.string());
-        return false;
-    }
-
-    out << last_non_empty << '\n';
-    return true;
-}
-
-void write_density_profile_csv(const fs::path& filepath, const std::vector<double>& density, int rank_idx) {
-    if (rank_idx != 0) {
-        return;
-    }
-
-    std::ofstream out(filepath, std::ios::out | std::ios::trunc);
-    if (!out) {
-        fmt::print(stderr, "[series_cwa_test] Failed to open {} for writing density profile.\n", filepath.string());
-        return;
-    }
-
-    out << "bin,rho\n";
-    for (std::size_t idx = 0; idx < density.size(); ++idx) {
-        out << idx << ',' << density[idx] << '\n';
-    }
-}
-
 struct ProgramOptions {
     std::string base_dir;
     std::string ori_config;
@@ -200,6 +127,7 @@ int main(int argc, char** argv) {
     fs::path sample_dir = base_dir / "sample_csv";
     fs::path cwa_sample_csv = sample_dir / "cwa_instant.csv";
     fs::path U_K_tot_csv_path = sample_dir / "U_K_tot_log.csv";
+    const std::string cwa_tag = "series_cwa_test";
     fs::path interface_dir = base_dir / "interfaces";
     fs::path interface_csv_dir = interface_dir / "csv";
     fs::path density_dir = base_dir / "density_profile";
@@ -258,7 +186,7 @@ int main(int argc, char** argv) {
 
                 const auto density_profile = sim.get_density_profile(n_bins_per_rank);
                 fs::path density_step_csv = density_dir / fmt::format("density_step_{}.csv", step);
-                write_density_profile_csv(density_step_csv, density_profile, rank_idx);
+                write_density_profile_csv(density_step_csv, density_profile, rank_idx, cwa_tag);
 
                 fs::path interface_plot_path = interface_dir / fmt::format("interface_step_{}.svg", step);
                 fs::path interface_csv_path = interface_csv_dir / fmt::format("interface_step_{}.csv", step);
@@ -268,7 +196,7 @@ int main(int argc, char** argv) {
                     fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
                     fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
                     sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);
-                    append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx);
+                    append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx, cwa_tag);
                 } 
             }
 

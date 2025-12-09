@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -15,11 +16,14 @@ struct ProgramOptions {
     std::string base_dir;
     std::string ori_config;
     std::vector<MDConfigOverride> overrides;
+    double epsilon_deform = 0.15;
+    double lambda_deform = 1.0;
 };
 
 void print_usage(const char* prog_name) {
     fmt::print(
-        "Usage: {} --base-dir <output_dir> --ori-config <config.json> [--D<Param>=<value> ...]\n",
+        "Usage: {} --base-dir <output_dir> --ori-config <config.json> "
+        "[--epsilon-deform <val>] [--lambda-deform <val>] [--D<Param>=<value> ...]\n",
         prog_name
     );
 }
@@ -51,9 +55,15 @@ ProgramOptions parse_args(int argc, char** argv) {
             opts.base_dir = consume_value(arg, argc, argv, idx);
         } else if (arg.rfind("--ori-config", 0) == 0) {
             opts.ori_config = consume_value(arg, argc, argv, idx);
+        } else if (arg.rfind("--epsilon-deform", 0) == 0) {
+            const std::string value = consume_value(arg, argc, argv, idx);
+            opts.epsilon_deform = std::stod(value);
+        } else if (arg.rfind("--lambda-deform", 0) == 0) {
+            const std::string value = consume_value(arg, argc, argv, idx);
+            opts.lambda_deform = std::stod(value);
         } else {
             bool is_override = false;
-            if (arg.rfind("--D", 0) == 0 || arg.rfind('D', 0) == 0) {
+            if (arg.rfind("--D", 0) == 0 || arg.rfind("D", 0) == 0) {
                 is_override = true;
             } else if (arg.size() > 2 && arg.rfind("--", 0) == 0) {
                 throw std::runtime_error(fmt::format("Unknown option '{}'", arg));
@@ -88,7 +98,7 @@ int main(int argc, char** argv) {
     try {
         options = parse_args(argc, argv);
     } catch (const std::exception& ex) {
-        fmt::print(stderr, "[series_cwa_test] {}\n", ex.what());
+        fmt::print(stderr, "[series_partial_U_lambda_test] {}\n", ex.what());
         return 1;
     }
 
@@ -104,39 +114,45 @@ int main(int argc, char** argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &rank_size);
 
     if (cfg_mgr.config.rank_size != rank_size) {
-        fmt::print(stderr, "[series_cwa_test] rank size = {} doesn't match config.\n", rank_size);
+        fmt::print(stderr, "[series_partial_U_lambda_test] rank size = {} doesn't match config.\n", rank_size);
         MPI_Abort(MPI_COMM_WORLD, 2);
     }
 
     cfg_mgr.config.rank_size = rank_size;
     cfg_mgr.config.rank_idx = rank_idx;
 
+    // Apply deformation to box dimensions using epsilon_deform and lambda_deform.
+    const double Lx_from_cfg = cfg_mgr.config.box_w_global;
+    const double Ly_from_cfg = cfg_mgr.config.box_h_global;
+    const double exponent = options.epsilon_deform * options.lambda_deform;
+    const double Lx_deformed = Lx_from_cfg * std::exp(exponent);
+    const double Ly_deformed = Ly_from_cfg * std::exp(-exponent);
+    cfg_mgr.config.box_w_global = Lx_deformed;
+    cfg_mgr.config.box_h_global = Ly_deformed;
+
     int n_record_interval = static_cast<int>(cfg_mgr.config.save_dt_interval / cfg_mgr.config.dt);
     if (n_record_interval <= 0) {
         n_record_interval = 1;
     }
 
-    const int n_steps = 1000000;
+    const int n_steps = 1'000'000;
     const int q_min = 3;
     const int q_max = 10;
-    const int n_bins_per_rank = 16;
-    const int n_last_env_step = n_steps - n_record_interval;
+    const int n_bins_per_rank = 32;
 
     fs::path base_dir = fs::path(options.base_dir);
-    fs::path cwa_plot_dir = base_dir / "cwa_plot_resumed";
+    fs::path cwa_plot_dir = base_dir / "cwa_plot";
     fs::path cwa_plot_csv_dir = cwa_plot_dir / "csv";
-    fs::path sample_dir = base_dir / "sample_csv_resumed";
+    fs::path sample_dir = base_dir / "sample_csv";
     fs::path cwa_sample_csv = sample_dir / "cwa_instant.csv";
     fs::path U_K_tot_csv_path = sample_dir / "U_K_tot_log.csv";
-    const std::string cwa_tag = "series_cwa_test_resume";
-    fs::path interface_dir = base_dir / "interfaces_resumed";
+    const std::string tag = "series_partial_U_lambda_test";
+    fs::path interface_dir = base_dir / "interfaces";
     fs::path interface_csv_dir = interface_dir / "csv";
-    fs::path density_dir = base_dir / "density_profile_resumed";
-    fs::path load_env_dir = base_dir / "saved_env";
-    fs::path load_env_file = load_env_dir / "saved_env.bin";
-    fs::path saved_env_dir = base_dir / "saved_env_resumed";
+    fs::path density_dir = base_dir / "density_profile";
+    fs::path saved_env_dir = base_dir / "saved_env";
     fs::path saved_env_file = saved_env_dir / "saved_env.bin";
-    fs::path saved_cfg_path = base_dir / "config_resumed.json";
+    fs::path saved_cfg_path = base_dir / "config.json";
 
     std::vector<fs::path> dirs_to_create = {
         base_dir,
@@ -159,21 +175,28 @@ int main(int argc, char** argv) {
         std::ofstream clear_samples(cwa_sample_csv, std::ios::out | std::ios::trunc);
         std::ofstream clear_uk(U_K_tot_csv_path, std::ios::out | std::ios::trunc);
         if (!clear_samples || !clear_uk) {
-            fmt::print(stderr, "[series_cwa_test] Failed to initialize CSV outputs in {}.\n", sample_dir.string());
+            fmt::print(stderr, "[series_partial_U_lambda_test] Failed to initialize CSV outputs in {}.\n",
+                       sample_dir.string());
             MPI_Abort(MPI_COMM_WORLD, 4);
         }
         cfg_mgr.config_to_json(saved_cfg_path.string());
         cfg_mgr.print_config();
+        fmt::print("[series_partial_U_lambda_test] epsilon_deform = {}, lambda_deform = {}\n",
+                   options.epsilon_deform, options.lambda_deform);
+        fmt::print("[series_partial_U_lambda_test] Lx_from_cfg = {}, Ly_from_cfg = {}, Lx = {}, Ly = {}\n",
+                   Lx_from_cfg, Ly_from_cfg, Lx_deformed, Ly_deformed);
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
 
     {
-        MDSimulation sim(cfg_mgr, MPI_COMM_WORLD, load_env_file, n_last_env_step);
+        MDSimulation sim(cfg_mgr, MPI_COMM_WORLD);
 
-        RankZeroPrint(rank_idx, "[series_cwa_test] Waiting for MPI_Barrier before stepping.\n");
+        RankZeroPrint(rank_idx,
+                      "[series_partial_U_lambda_test] Waiting for MPI_Barrier before stepping.\n");
         MPI_Barrier(MPI_COMM_WORLD);
-        RankZeroPrint(rank_idx, "[series_cwa_test] Starting simulation loop.\n");
+        RankZeroPrint(rank_idx,
+                      "[series_partial_U_lambda_test] Starting simulation loop.\n");
 
         for (int step = 0; step < n_steps; ++step) {
             sim.step_single_nose_hoover();
@@ -185,24 +208,41 @@ int main(int argc, char** argv) {
 
                 const double U_tot = sim.cal_total_U();
                 const double K_tot = sim.cal_total_K();
-                sim.write_to_file(U_K_tot_csv_path.string(), "U_tot, {}, K_tot, {}, step, {}\n", U_tot, K_tot, step);
+                const double partial_U_lambda = sim.cal_partial_U_lambda(options.epsilon_deform);
+                const double Lx = sim.get_Lx();
+                const double Ly = sim.get_Ly();
+
+                append_csv(U_K_tot_csv_path,
+                           rank_idx,
+                           tag,
+                           "U_tot, {}, K_tot, {}, partial_U_lambda, {}, epsilon_deform, {}, lambda_deform, {}, Lx, {}, Ly, {}, step, {}\n",
+                           U_tot,
+                           K_tot,
+                           partial_U_lambda,
+                           options.epsilon_deform,
+                           options.lambda_deform,
+                           Lx,
+                           Ly,
+                           step);
 
                 const auto density_profile = sim.get_density_profile(n_bins_per_rank);
                 fs::path density_step_csv = density_dir / fmt::format("density_step_{}.csv", step);
-                write_density_profile_csv(density_step_csv, density_profile, rank_idx, cwa_tag);
+                write_density_profile_csv(density_step_csv, density_profile, rank_idx, tag);
 
                 fs::path interface_plot_path = interface_dir / fmt::format("interface_step_{}.svg", step);
                 fs::path interface_csv_path = interface_csv_dir / fmt::format("interface_step_{}.csv", step);
                 sim.plot_interfaces(interface_plot_path.string(), interface_csv_path.string(), density_profile);
 
-                fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
-                fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
-                sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);
-                append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx, cwa_tag);
+                if (step > 200'000) {
+                    fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
+                    fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
+                    sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);
+                    append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx, tag);
+                }
             }
 
             if (step % 100 == 0) {
-                RankZeroPrint(rank_idx, "[series_cwa_test] Step {}.\n", step);
+                RankZeroPrint(rank_idx, "[series_partial_U_lambda_test] Step {}.\n", step);
             }
         }
     }

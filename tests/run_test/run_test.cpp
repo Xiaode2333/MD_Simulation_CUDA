@@ -3,30 +3,6 @@
 #include <filesystem>
 #include <cstdio>
 
-template <typename... Args>
-void RankZeroPrint(int rank_idx, fmt::format_string<Args...> format_str, Args&&... args) {
-    if (rank_idx == 0) {
-        fmt::print(format_str, std::forward<Args>(args)...);
-        std::fflush(stdout);
-    }
-}
-
-bool create_folder(const std::string& path, int rank_idx) {
-    if (rank_idx != 0) {
-        return true;
-    }
-
-    std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
-        std::filesystem::create_directories(path, ec);
-        if (ec) {
-            fmt::print(stderr, "Failed to create dir {}. Error: {}\n", path, ec.message());
-            return false;
-        }
-    }
-    return true;
-}
-
 int main(){
     const std::string cfg_path = "./tests/run_test/config.json";
     MDConfigManager cfg_mgr;

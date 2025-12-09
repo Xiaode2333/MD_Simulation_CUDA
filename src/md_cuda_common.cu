@@ -229,6 +229,123 @@ __global__ void li_force_kernel(Particle* particles,
     particles[idx].acc.y = fi_d.y / mass;
 }
 
+__global__ void cal_partial_U_lambda_kernel(const Particle* __restrict__ particles,
+                                            const Particle* __restrict__ halo_left,
+                                            const Particle* __restrict__ halo_right,
+                                            int n_local, int n_left, int n_right,
+                                            double Lx, double Ly,
+                                            double sigma_AA, double sigma_BB, double sigma_AB,
+                                            double epsilon_AA, double epsilon_BB, double epsilon_AB,
+                                            double cutoff,
+                                            double epsilon_lambda,
+                                            double* __restrict__ partial_sums)
+{
+    extern __shared__ double sdata[];
+    const int tid = threadIdx.x;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    double ui = 0.0;
+
+    if (idx < n_local) {
+        const int n_total      = n_local + n_left + n_right;
+        const int offset_left  = n_local;
+        const int offset_right = n_local + n_left;
+
+        const double2 ri_d = particles[idx].pos;
+        const int     type_i = particles[idx].type;
+
+        const float Lx_f     = static_cast<float>(Lx);
+        const float Ly_f     = static_cast<float>(Ly);
+        const float cutoff_f = static_cast<float>(cutoff);
+
+        for (int j = 0; j < n_total; ++j) {
+            if (j == idx) {
+                continue;
+            }
+
+            double2 rj_d;
+            int     type_j;
+
+            if (j < n_local) {
+                rj_d   = particles[j].pos;
+                type_j = particles[j].type;
+            }
+            else if (j < offset_right) {
+                const int halo_idx = j - offset_left;
+                rj_d   = halo_left[halo_idx].pos;
+                type_j = halo_left[halo_idx].type;
+            }
+            else {
+                const int halo_idx = j - offset_right;
+                rj_d   = halo_right[halo_idx].pos;
+                type_j = halo_right[halo_idx].type;
+            }
+
+            float dx_f = static_cast<float>(ri_d.x - rj_d.x);
+            float dy_f = static_cast<float>(ri_d.y - rj_d.y);
+
+            dx_f = dx_f - Lx_f * roundf(dx_f / Lx_f);
+            dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+
+            float sigma_f   = 0.0f;
+            float epsilon_f = 0.0f;
+            if (type_i == 0 && type_j == 0) {
+                sigma_f   = static_cast<float>(sigma_AA);
+                epsilon_f = static_cast<float>(epsilon_AA);
+            }
+            else if (type_i == 1 && type_j == 1) {
+                sigma_f   = static_cast<float>(sigma_BB);
+                epsilon_f = static_cast<float>(epsilon_BB);
+            }
+            else {
+                sigma_f   = static_cast<float>(sigma_AB);
+                epsilon_f = static_cast<float>(epsilon_AB);
+            }
+
+            const float rc_f    = cutoff_f * sigma_f;
+            const float rc_sq_f = rc_f * rc_f;
+            const float dr_sq_f = dx_f * dx_f + dy_f * dy_f;
+
+            if (dr_sq_f > 0.0f && dr_sq_f < rc_sq_f) {
+                const float sigma_sq_f = sigma_f * sigma_f;
+                const float r2_inv_f   = 1.0f / dr_sq_f;
+                const float sr2_f      = sigma_sq_f * r2_inv_f;
+                const float sr6_f      = sr2_f * sr2_f * sr2_f;
+                const float sr12_f     = sr6_f * sr6_f;
+
+                const float tmp_f = 24.0f * epsilon_f * (2.0f * sr12_f - sr6_f) * r2_inv_f;
+
+                const float Fx_f = tmp_f * dx_f;
+                const float Fy_f = tmp_f * dy_f;
+
+                const double dx_d = static_cast<double>(dx_f);
+                const double dy_d = static_cast<double>(dy_f);
+                const double Fx_d = static_cast<double>(Fx_f);
+                const double Fy_d = static_cast<double>(Fy_f);
+
+                const double pair_val = -epsilon_lambda * (Fx_d * dx_d - Fy_d * dy_d);
+
+                // 0.5 factor to avoid double counting pairs
+                ui += 0.5 * pair_val;
+            }
+        }
+    }
+
+    sdata[tid] = ui;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        partial_sums[blockIdx.x] = sdata[0];
+    }
+}
+
 // Verlocity-Verlot half kick
 //from r^{n}, v^{n}, a^{n} to r^{n+1}, v^{n+1/2}, a^{n};
 __global__ void step_half_vv_kernel(Particle* particles, int n_local, double dt, double Lx, double Ly){
@@ -468,9 +585,7 @@ __global__ void cal_local_U_kernel(const Particle* __restrict__ particles,
     if (tid == 0) {
         partial_sums[blockIdx.x] = sdata[0];
     }
-}
-
-
+    
 __global__ void local_density_profile_kernel(const Particle* __restrict__ particles, int n_local, int n_bins_per_rank,
                                    double xmin, double xmax,
                                    int* count_A, int* count_B){
@@ -521,4 +636,3 @@ __global__ void local_density_profile_kernel(const Particle* __restrict__ partic
         }
     }
 }
-

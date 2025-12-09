@@ -34,6 +34,7 @@ class MDSimulation {
         
         double cal_total_K();
         double cal_total_U();
+        double cal_partial_U_lambda(double epsilon_lambda);
         double deform(double epsilon, double U_old);
         double get_Lx() const { return cfg_manager.config.box_w_global; }
         double get_Ly() const { return cfg_manager.config.box_h_global; }

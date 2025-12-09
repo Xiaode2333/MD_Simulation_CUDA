@@ -4,64 +4,6 @@
 #include <fstream>
 #include <cstdio>
 
-namespace {
-template <typename... Args>
-void RankZeroPrint(int rank_idx, fmt::format_string<Args...> format_str, Args&&... args) {
-    if (rank_idx == 0) {
-        fmt::print(format_str, std::forward<Args>(args)...);
-        std::fflush(stdout);
-    }
-}
-
-bool create_folder(const std::string& path, int rank_idx) {
-    if (rank_idx != 0) {
-        return true;
-    }
-
-    std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
-        std::filesystem::create_directories(path, ec);
-        if (ec) {
-            fmt::print(stderr, "Failed to create dir {}. Error: {}\n", path, ec.message());
-            return false;
-        }
-    }
-    return true;
-}
-
-bool append_latest_line(const std::string& src, const std::string& dst, int rank_idx) {
-    if (rank_idx != 0) return true;
-
-    std::ifstream in(src);
-    if (!in) {
-        fmt::print(stderr, "[CWA Test] Failed to open {} for reading.\n", src);
-        return false;
-    }
-
-    std::string line;
-    std::string last_non_empty;
-    while (std::getline(in, line)) {
-        if (!line.empty()) {
-            last_non_empty = line;
-        }
-    }
-
-    if (last_non_empty.empty()) {
-        fmt::print(stderr, "[CWA Test] No data found in {}.\n", src);
-        return false;
-    }
-
-    std::ofstream out(dst, std::ios::out | std::ios::app);
-    if (!out) {
-        fmt::print(stderr, "[CWA Test] Failed to open {} for appending.\n", dst);
-        return false;
-    }
-
-    out << last_non_empty << '\n';
-    return true;
-}
-} // namespace
-
 int main(){
     const std::string cfg_path = "./tests/run_test/saved_env_T_0.9/config.json";
     MDConfigManager cfg_mgr;
@@ -95,6 +37,7 @@ int main(){
     std::string cwa_sample_dir = "./tests/cwa_test/sample_csv/";
     std::string cwa_sample_csv = cwa_sample_dir + "cwa_instant.csv";
     std::string U_tot_csv_path = cwa_sample_dir + "U_tot_log.csv";
+    const std::string cwa_tag = "CWA Test";
 
     if (!create_folder(cwa_plot_dir, rank_idx)) MPI_Abort(MPI_COMM_WORLD, 1);
     if (!create_folder(cwa_plot_csv_dir, rank_idx)) MPI_Abort(MPI_COMM_WORLD, 1);
@@ -134,7 +77,7 @@ int main(){
                     std::error_code ec;
                     const auto file_sz = std::filesystem::file_size(cwa_step_csv, ec);
                     if (!ec && file_sz > 0) {
-                        append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx);
+                        append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx, cwa_tag);
                     } else {
                         fmt::print("[CWA Test] Skipping append for step {} (no data).\n", step);
                     }

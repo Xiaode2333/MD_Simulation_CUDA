@@ -1729,6 +1729,60 @@ double MDSimulation::cal_total_U() {
     return U_global;
 }
 
+double MDSimulation::cal_partial_U_lambda(double epsilon_lambda) {
+    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    const int n_local = cfg_manager.config.n_local;
+    const int n_left  = cfg_manager.config.n_halo_left;
+    const int n_right = cfg_manager.config.n_halo_right;
+
+    if (n_local <= 0) {
+        return 0.0;
+    }
+
+    const int blocks = (n_local + threads - 1) / threads;
+
+    thrust::device_vector<double> d_partial(blocks);
+
+    cal_partial_U_lambda_kernel<<<blocks,
+                                  threads,
+                                  threads * static_cast<int>(sizeof(double))>>>(
+        thrust::raw_pointer_cast(d_particles.data()),
+        thrust::raw_pointer_cast(d_particles_halo_left.data()),
+        thrust::raw_pointer_cast(d_particles_halo_right.data()),
+        n_local,
+        n_left,
+        n_right,
+        cfg_manager.config.box_w_global,
+        cfg_manager.config.box_h_global,
+        cfg_manager.config.SIGMA_AA,
+        cfg_manager.config.SIGMA_BB,
+        cfg_manager.config.SIGMA_AB,
+        cfg_manager.config.EPSILON_AA,
+        cfg_manager.config.EPSILON_BB,
+        cfg_manager.config.EPSILON_AB,
+        cfg_manager.config.cutoff,
+        epsilon_lambda,
+        thrust::raw_pointer_cast(d_partial.data())
+    );
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    std::vector<double> h_partial(static_cast<size_t>(blocks));
+    CUDA_CHECK(cudaMemcpy(h_partial.data(),
+                          thrust::raw_pointer_cast(d_partial.data()),
+                          static_cast<size_t>(blocks) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+
+    double local_sum = 0.0;
+    for (int i = 0; i < blocks; ++i) {
+        local_sum += h_partial[i];
+    }
+
+    double global_sum = 0.0;
+    MPI_Allreduce(&local_sum, &global_sum, 1, MPI_DOUBLE, MPI_SUM, comm);
+    return global_sum;
+}
+
 double MDSimulation::deform(double epsilon, double U_old) {
     int world_rank = 0;
     int world_size = 0;

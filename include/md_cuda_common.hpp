@@ -67,7 +67,6 @@ __global__ void pack_selected_kernel(const Particle* particles,
                                      Particle* out);
                       
 
-                                            
 __global__ void li_force_kernel(Particle* particles, Particle* halo_left, Particle* halo_right,
         int n_local, int n_left, int n_right,
         double Lx, double Ly,
@@ -75,7 +74,22 @@ __global__ void li_force_kernel(Particle* particles, Particle* halo_left, Partic
         double epsilon_AA, double epsilon_BB, double epsilon_AB,
         double cutoff,
         double mass_0, double mass_1);        
-        
+
+// Compute per-block partial sums of dU/dlambda on the device.
+// For each interacting pair with force F = (Fx, Fy) and separation dr = (dx, dy),
+// the pair contribution is -epsilon_lambda * (Fx * dx - Fy * dy), with 0.5 factor
+// inside the kernel to avoid double counting.
+__global__ void cal_partial_U_lambda_kernel(const Particle* __restrict__ particles,
+                                            const Particle* __restrict__ halo_left,
+                                            const Particle* __restrict__ halo_right,
+                                            int n_local, int n_left, int n_right,
+                                            double Lx, double Ly,
+                                            double sigma_AA, double sigma_BB, double sigma_AB,
+                                            double epsilon_AA, double epsilon_BB, double epsilon_AB,
+                                            double cutoff,
+                                            double epsilon_lambda,
+                                            double* __restrict__ partial_sums);
+
 // Verlocity-Verlot half kick
 //from r^{n}, v^{n}, a^{n} to r^{n+1}, v^{n+1/2}, a^{n};
 __global__ void step_half_vv_kernel(Particle* particles, int n_local, double dt, double Lx, double Ly);
@@ -117,3 +131,5 @@ __global__ void cal_local_U_kernel(const Particle* __restrict__ particles,
 __global__ void local_density_profile_kernel(const Particle* __restrict__ particles, int n_local, int n_bins_per_rank,
                                    double xmin, double xmax,
                                    int* count_A, int* count_B);
+
+                                
