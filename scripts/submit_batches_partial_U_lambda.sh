@@ -25,8 +25,7 @@ for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
             scripts/run_series_partial_U_lambda.sh \
             "$LAMBDA_DIR" \
             "$ORI_CONFIG" \
-            "T_target=${T}" \
+            "DT_target=${T}" \
             "lambda-deform=${lambda}"
     done
 done
-

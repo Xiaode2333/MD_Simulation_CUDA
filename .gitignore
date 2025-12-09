@@ -38,3 +38,4 @@ __pycache__/
 /tmp/
 .vscode/
 *.bin
+./ToDo.md
