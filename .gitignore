@@ -32,7 +32,7 @@ __pycache__/
 *.pdf
 !/docs/figs/*.svg
 *.out
-/python/__pycache__/
+python/__pycache__/
 *.csv
 /tmp/
 .vscode/
