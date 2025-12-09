@@ -637,3 +637,143 @@ __global__ void local_density_profile_kernel(const Particle* __restrict__ partic
         }
     }
 }
+
+__global__ void local_pressure_tensor_profile_kernel(
+    const Particle* __restrict__ particles,
+    const Particle* __restrict__ halo_left,
+    const Particle* __restrict__ halo_right,
+    int n_local, int n_left, int n_right,
+    double Lx, double Ly,
+    double mass_A, double mass_B,
+    double sigma_AA, double sigma_BB, double sigma_AB,
+    double epsilon_AA, double epsilon_BB, double epsilon_AB,
+    double cutoff,
+    int n_bins_local,
+    double* __restrict__ P_xx,
+    double* __restrict__ P_yy,
+    double* __restrict__ P_xy)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_local || n_bins_local <= 0) {
+        return;
+    }
+
+    const int n_total      = n_local + n_left + n_right;
+    const int offset_left  = n_local;
+    const int offset_right = n_local + n_left;
+
+    const Particle pi = particles[idx];
+    const double2 ri  = pi.pos;
+    const double vx   = pi.vel.x;
+    const double vy   = pi.vel.y;
+    const int type_i  = pi.type;
+
+    const double mass_i = (type_i == 0 ? mass_A : mass_B);
+
+    // Kinetic contribution: m v_α v_β assigned to bin of y_i
+    double y_i = pbc_wrap_hd(ri.y, Ly);
+    double pos_norm = (Ly > 0.0) ? (y_i / Ly) : 0.0;
+    int bin = static_cast<int>(pos_norm * static_cast<double>(n_bins_local));
+    if (bin < 0) {
+        bin = 0;
+    } else if (bin >= n_bins_local) {
+        bin = n_bins_local - 1;
+    }
+
+    const double Pxx_kin = mass_i * vx * vx;
+    const double Pyy_kin = mass_i * vy * vy;
+    const double Pxy_kin = mass_i * vx * vy;
+
+    atomicAdd(&P_xx[bin], Pxx_kin);
+    atomicAdd(&P_yy[bin], Pyy_kin);
+    atomicAdd(&P_xy[bin], Pxy_kin);
+
+    // Virial (pair) contribution using LJ force and midpoint IK assignment
+    const float Lx_f     = static_cast<float>(Lx);
+    const float Ly_f     = static_cast<float>(Ly);
+    const float cutoff_f = static_cast<float>(cutoff);
+
+    for (int j = 0; j < n_total; ++j) {
+        if (j == idx) {
+            continue;
+        }
+
+        double2 rj;
+        int     type_j;
+
+        if (j < n_local) {
+            rj     = particles[j].pos;
+            type_j = particles[j].type;
+        } else if (j < offset_right) {
+            const int halo_idx = j - offset_left;
+            rj     = halo_left[halo_idx].pos;
+            type_j = halo_left[halo_idx].type;
+        } else {
+            const int halo_idx = j - offset_right;
+            rj     = halo_right[halo_idx].pos;
+            type_j = halo_right[halo_idx].type;
+        }
+
+        float dx_f = static_cast<float>(ri.x - rj.x);
+        float dy_f = static_cast<float>(ri.y - rj.y);
+
+        dx_f = dx_f - Lx_f * roundf(dx_f / Lx_f);
+        dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+
+        float sigma_f   = 0.0f;
+        float epsilon_f = 0.0f;
+        if (type_i == 0 && type_j == 0) {
+            sigma_f   = static_cast<float>(sigma_AA);
+            epsilon_f = static_cast<float>(epsilon_AA);
+        } else if (type_i == 1 && type_j == 1) {
+            sigma_f   = static_cast<float>(sigma_BB);
+            epsilon_f = static_cast<float>(epsilon_BB);
+        } else {
+            sigma_f   = static_cast<float>(sigma_AB);
+            epsilon_f = static_cast<float>(epsilon_AB);
+        }
+
+        const float rc_f    = cutoff_f * sigma_f;
+        const float rc_sq_f = rc_f * rc_f;
+        const float dr_sq_f = dx_f * dx_f + dy_f * dy_f;
+
+        if (dr_sq_f > 0.0f && dr_sq_f < rc_sq_f) {
+            const float sigma_sq_f = sigma_f * sigma_f;
+            const float r2_inv_f   = 1.0f / dr_sq_f;
+            const float sr2_f      = sigma_sq_f * r2_inv_f;
+            const float sr6_f      = sr2_f * sr2_f * sr2_f;
+            const float sr12_f     = sr6_f * sr6_f;
+
+            const float tmp_f = 24.0f * epsilon_f * (2.0f * sr12_f - sr6_f) * r2_inv_f;
+            const float Fx_f  = tmp_f * dx_f;
+            const float Fy_f  = tmp_f * dy_f;
+
+            const double dx = static_cast<double>(dx_f);
+            const double dy = static_cast<double>(dy_f);
+            const double Fx = static_cast<double>(Fx_f);
+            const double Fy = static_cast<double>(Fy_f);
+
+            // Midpoint along minimum-image segment in y
+            double y_mid = ri.y - 0.5 * dy;
+            y_mid        = pbc_wrap_hd(y_mid, Ly);
+
+            double pos_norm_mid = (Ly > 0.0) ? (y_mid / Ly) : 0.0;
+            int bin_pair = static_cast<int>(pos_norm_mid * static_cast<double>(n_bins_local));
+            if (bin_pair < 0) {
+                bin_pair = 0;
+            } else if (bin_pair >= n_bins_local) {
+                bin_pair = n_bins_local - 1;
+            }
+
+            // 0.5 factor to avoid double counting i–j and j–i, consistent
+            // with energy kernels; local–halo pairs are split between ranks.
+            const double vir_xx = 0.5 * dx * Fx;
+            const double vir_yy = 0.5 * dy * Fy;
+            const double vir_xy = 0.5 * dx * Fy;
+
+            atomicAdd(&P_xx[bin_pair], vir_xx);
+            atomicAdd(&P_yy[bin_pair], vir_yy);
+            atomicAdd(&P_xy[bin_pair], vir_xy);
+        }
+    }
+}

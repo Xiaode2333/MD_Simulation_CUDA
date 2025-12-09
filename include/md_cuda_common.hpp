@@ -132,4 +132,25 @@ __global__ void local_density_profile_kernel(const Particle* __restrict__ partic
                                    double xmin, double xmax,
                                    int* count_A, int* count_B);
 
+// Local Irving–Kirkwood pressure tensor profile along y.
+// Domain [0, Ly) is split into n_bins_local bins; this kernel accumulates
+// unnormalized rank-local P_xx, P_yy, P_xy per bin, using:
+//   kinetic: m_i v_i^α v_i^β at particle y_i
+//   virial:  (1/2) r_{ij}^α F_{ij}^β at pair midpoint (minimum image).
+// To get physical pressure, sum over ranks and divide by (Lx * Ly/n_bins_local).
+__global__ void local_pressure_tensor_profile_kernel(
+    const Particle* __restrict__ particles,
+    const Particle* __restrict__ halo_left,
+    const Particle* __restrict__ halo_right,
+    int n_local, int n_left, int n_right,
+    double Lx, double Ly,
+    double mass_A, double mass_B,
+    double sigma_AA, double sigma_BB, double sigma_AB,
+    double epsilon_AA, double epsilon_BB, double epsilon_AB,
+    double cutoff,
+    int n_bins_local,
+    double* __restrict__ P_xx,
+    double* __restrict__ P_yy,
+    double* __restrict__ P_xy);
+
                                 

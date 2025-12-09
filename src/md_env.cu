@@ -2427,6 +2427,130 @@ std::vector<std::vector<double>> MDSimulation::get_smooth_interface(int n_grid_y
     return result;
 }
 
+std::vector<double> MDSimulation::get_pressure_profile(int n_bins_local)
+{
+    std::vector<double> empty_result;
+    if (n_bins_local <= 0) {
+        return empty_result;
+    }
+
+    const int n_local = cfg_manager.config.n_local;
+    const int n_left  = cfg_manager.config.n_halo_left;
+    const int n_right = cfg_manager.config.n_halo_right;
+    int threads       = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
+    const int blocks = (n_local + threads - 1) / threads;
+
+    thrust::device_vector<double> d_P_xx(n_bins_local, 0.0);
+    thrust::device_vector<double> d_P_yy(n_bins_local, 0.0);
+    thrust::device_vector<double> d_P_xy(n_bins_local, 0.0);
+
+    if (blocks > 0) {
+        local_pressure_tensor_profile_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles.data()),
+            thrust::raw_pointer_cast(d_particles_halo_left.data()),
+            thrust::raw_pointer_cast(d_particles_halo_right.data()),
+            n_local,
+            n_left,
+            n_right,
+            cfg_manager.config.box_w_global,
+            cfg_manager.config.box_h_global,
+            cfg_manager.config.MASS_A,
+            cfg_manager.config.MASS_B,
+            cfg_manager.config.SIGMA_AA,
+            cfg_manager.config.SIGMA_BB,
+            cfg_manager.config.SIGMA_AB,
+            cfg_manager.config.EPSILON_AA,
+            cfg_manager.config.EPSILON_BB,
+            cfg_manager.config.EPSILON_AB,
+            cfg_manager.config.cutoff,
+            n_bins_local,
+            thrust::raw_pointer_cast(d_P_xx.data()),
+            thrust::raw_pointer_cast(d_P_yy.data()),
+            thrust::raw_pointer_cast(d_P_xy.data())
+        );
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    std::vector<double> local_Pxx(static_cast<std::size_t>(n_bins_local), 0.0);
+    std::vector<double> local_Pyy(static_cast<std::size_t>(n_bins_local), 0.0);
+    std::vector<double> local_Pxy(static_cast<std::size_t>(n_bins_local), 0.0);
+
+    if (n_bins_local > 0) {
+        thrust::copy(d_P_xx.begin(), d_P_xx.end(), local_Pxx.begin());
+        thrust::copy(d_P_yy.begin(), d_P_yy.end(), local_Pyy.begin());
+        thrust::copy(d_P_xy.begin(), d_P_xy.end(), local_Pxy.begin());
+    }
+
+    int world_rank = 0;
+    MPI_Comm_rank(comm, &world_rank);
+
+    std::vector<double> global_Pxx;
+    std::vector<double> global_Pyy;
+    std::vector<double> global_Pxy;
+
+    if (world_rank == 0) {
+        global_Pxx.assign(static_cast<std::size_t>(n_bins_local), 0.0);
+        global_Pyy.assign(static_cast<std::size_t>(n_bins_local), 0.0);
+        global_Pxy.assign(static_cast<std::size_t>(n_bins_local), 0.0);
+    }
+
+    MPI_Reduce(local_Pxx.data(),
+               world_rank == 0 ? global_Pxx.data() : nullptr,
+               n_bins_local,
+               MPI_DOUBLE,
+               MPI_SUM,
+               0,
+               comm);
+    MPI_Reduce(local_Pyy.data(),
+               world_rank == 0 ? global_Pyy.data() : nullptr,
+               n_bins_local,
+               MPI_DOUBLE,
+               MPI_SUM,
+               0,
+               comm);
+    MPI_Reduce(local_Pxy.data(),
+               world_rank == 0 ? global_Pxy.data() : nullptr,
+               n_bins_local,
+               MPI_DOUBLE,
+               MPI_SUM,
+               0,
+               comm);
+
+    if (world_rank != 0) {
+        return empty_result;
+    }
+
+    std::vector<double> result(static_cast<std::size_t>(n_bins_local) * 3u, 0.0);
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+    const double dy = Ly / static_cast<double>(n_bins_local);
+    const double volume = Lx * dy;
+
+    for (int k = 0; k < n_bins_local; ++k) {
+        double Pxx = global_Pxx[static_cast<std::size_t>(k)];
+        double Pyy = global_Pyy[static_cast<std::size_t>(k)];
+        double Pxy = global_Pxy[static_cast<std::size_t>(k)];
+
+        if (volume > 0.0) {
+            Pxx /= volume;
+            Pyy /= volume;
+            Pxy /= volume;
+        }
+
+        result[static_cast<std::size_t>(k)]                          = Pxx;
+        result[static_cast<std::size_t>(k + n_bins_local)]           = Pyy;
+        result[static_cast<std::size_t>(k + 2 * n_bins_local)]       = Pxy;
+    }
+
+    return result;
+}
+
 std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
 {
     std::vector<int> count_A(n_bins_per_rank, 0);

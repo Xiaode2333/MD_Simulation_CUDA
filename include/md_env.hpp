@@ -54,8 +54,14 @@ class MDSimulation {
         void do_CWA_instant(int q_min, int q_max, const std::string& csv_path, const std::string& plot_path, bool is_plot, int step);
 
         void plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho);
-        
-        std::vector<int> get_N_profile(int n_bins_per_rank); 
+
+        // On rank 0, returns 3 * n_bins_local entries:
+        //   result[k]                  = P_xx(y_k)
+        //   result[k +   n_bins_local] = P_yy(y_k)
+        //   result[k + 2*n_bins_local] = P_xy(y_k),
+        // already normalized by Lx * Δy; other ranks return an empty vector.
+        std::vector<double> get_pressure_profile(int n_bins_local);
+        std::vector<int> get_N_profile(int n_bins_per_rank);// number of particles per bin
         std::vector<double> get_density_profile(int n_bins_per_rank);
 
         template <typename... Args>
