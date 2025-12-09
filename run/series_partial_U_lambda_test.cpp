@@ -146,6 +146,7 @@ int main(int argc, char** argv) {
     fs::path sample_dir = base_dir / "sample_csv";
     fs::path cwa_sample_csv = sample_dir / "cwa_instant.csv";
     fs::path U_K_tot_csv_path = sample_dir / "U_K_tot_log.csv";
+    fs::path density_profile_csv_path = sample_dir / "density_profile_log.csv";
     const std::string tag = "series_partial_U_lambda_test";
     fs::path interface_dir = base_dir / "interfaces";
     fs::path interface_csv_dir = interface_dir / "csv";
@@ -174,7 +175,8 @@ int main(int argc, char** argv) {
     if (rank_idx == 0) {
         std::ofstream clear_samples(cwa_sample_csv, std::ios::out | std::ios::trunc);
         std::ofstream clear_uk(U_K_tot_csv_path, std::ios::out | std::ios::trunc);
-        if (!clear_samples || !clear_uk) {
+        std::ofstream clear_density(density_profile_csv_path, std::ios::out | std::ios::trunc);
+        if (!clear_samples || !clear_uk || !clear_density) {
             fmt::print(stderr, "[series_partial_U_lambda_test] Failed to initialize CSV outputs in {}.\n",
                        sample_dir.string());
             MPI_Abort(MPI_COMM_WORLD, 4);
@@ -229,11 +231,26 @@ int main(int argc, char** argv) {
                 fs::path density_step_csv = density_dir / fmt::format("density_step_{}.csv", step);
                 write_density_profile_csv(density_step_csv, density_profile, rank_idx, tag);
 
+                // Also append density profile into a single CSV: step followed by all bin values.
+                if (rank_idx == 0) {
+                    fmt::memory_buffer buf;
+                    fmt::format_to(std::back_inserter(buf), "{},{}", step, density_profile.front());
+                    for (std::size_t i = 1; i < density_profile.size(); ++i) {
+                        fmt::format_to(std::back_inserter(buf), ",{}", density_profile[i]);
+                    }
+                    fmt::format_to(std::back_inserter(buf), "\n");
+                    append_csv(density_profile_csv_path,
+                               rank_idx,
+                               tag,
+                               "{}",
+                               std::string(buf.data(), buf.size()));
+                }
+
                 fs::path interface_plot_path = interface_dir / fmt::format("interface_step_{}.svg", step);
                 fs::path interface_csv_path = interface_csv_dir / fmt::format("interface_step_{}.csv", step);
                 sim.plot_interfaces(interface_plot_path.string(), interface_csv_path.string(), density_profile);
 
-                if (step > 200'000) {
+                if (step > 500'000) {
                     fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
                     fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
                     sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);

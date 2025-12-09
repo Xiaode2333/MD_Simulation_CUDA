@@ -4,7 +4,7 @@
 #SBATCH --ntasks=4
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
-#SBATCH --mem=128G
+#SBATCH --mem=64G
 #SBATCH --output=./results/series_partial_U_lambda_test_%j.out
 
 set -euo pipefail
