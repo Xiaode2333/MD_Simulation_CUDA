@@ -9,14 +9,15 @@
 
 set -euo pipefail
 
-if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 <base_dir> <ori_config> [DT_init=0.1 Ddt=1e-4 ...]" >&2
+if [ "$#" -lt 3 ]; then
+    echo "Usage: $0 <base_dir> <ori_config> <series_bin> [DT_init=0.1 Ddt=1e-4 ...]" >&2
     exit 1
 fi
 
 BASE_DIR="$1"
 ORI_CONFIG="$2"
-shift 2
+SERIES_BIN="$3"
+shift 3
 
 if [ ! -f "$ORI_CONFIG" ]; then
     echo "[ERROR] Config file '$ORI_CONFIG' not found." >&2
@@ -51,24 +52,7 @@ source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate py3
 
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
-export VCPKG_CMAKE="$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake"
-export PYTHONPATH=$(python -c "import site; print(site.getsitepackages()[0])")
 
-PY_EXEC="$(which python)"
-
-cmake -B build -S . \
-    -DCMAKE_TOOLCHAIN_FILE="$VCPKG_CMAKE" \
-    -DVCPKG_TARGET_TRIPLET=x64-linux \
-    -DCMAKE_CUDA_COMPILER="$CUDA_HOME/bin/nvcc" \
-    -DCUDAToolkit_ROOT="$CUDA_HOME" \
-    -DCMAKE_C_COMPILER=mpicc \
-    -DCMAKE_CXX_COMPILER=mpicxx \
-    -DPython3_EXECUTABLE="$PY_EXEC" \
-    -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0" \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build build -j
-
-SERIES_BIN="./build/run_series_partial_U_lambda_test"
 if [ ! -x "$SERIES_BIN" ]; then
     echo "[ERROR] $SERIES_BIN was not produced." >&2
     exit 2
@@ -102,4 +86,3 @@ done
 
 echo "Launching series_partial_U_lambda_test with base dir '${BASE_DIR}' and config '${ORI_CONFIG}'."
 srun --cpu-bind=none "$SERIES_BIN" --base-dir "$BASE_DIR" --ori-config "$ORI_CONFIG" "${override_cli[@]}"
-
