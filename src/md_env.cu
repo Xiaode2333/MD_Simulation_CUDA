@@ -2284,7 +2284,7 @@ ABPairNetworks MDSimulation::get_AB_pair_network(const TriangulationResult& tri)
     return result;
 }
 
-void MDSimulation::plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho)
+void MDSimulation::plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho, bool is_LG)
 {
     if (cfg_manager.config.rank_idx != 0) return;
 
@@ -2296,7 +2296,9 @@ void MDSimulation::plot_interfaces(const std::string& filename, const std::strin
     if (n_grid_y < 10) n_grid_y = 10;
 
     // Smoothing sigma: 2.0 grid cells (approx 2.0 sigma) to kill molecular noise
-    std::vector<std::vector<double>> interfaces = get_smooth_interface(n_grid_y, 2.0);
+    std::vector<std::vector<double>> interfaces = is_LG
+        ? get_smooth_interface_LG(n_grid_y, 2.0)
+        : get_smooth_interface(n_grid_y, 2.0);
     
     plot_interfaces_python(
         h_particles, interfaces, filename, csv_path,
@@ -2322,7 +2324,7 @@ void plot_cwa_python(const std::string& csv_path, const std::string& figure_path
 }
 } // namespace
 
-void MDSimulation::do_CWA_instant(int q_min, int q_max, const std::string& csv_path, const std::string& plot_path, bool is_plot, int step) {
+void MDSimulation::do_CWA_instant(int q_min, int q_max, const std::string& csv_path, const std::string& plot_path, bool is_plot, int step, bool is_LG) {
     if (cfg_manager.config.rank_idx != 0) {
         return;
     }
@@ -2347,7 +2349,9 @@ void MDSimulation::do_CWA_instant(int q_min, int q_max, const std::string& csv_p
     if (n_grid_y < 32) n_grid_y = 32;
     const double smoothing_sigma = 2.0;
 
-    std::vector<std::vector<double>> interface_paths = compute_interface_paths(n_grid_y, smoothing_sigma);
+    std::vector<std::vector<double>> interface_paths = is_LG
+        ? compute_interface_paths_LG(n_grid_y, smoothing_sigma)
+        : compute_interface_paths(n_grid_y, smoothing_sigma);
     if (interface_paths.empty()) {
         RankZeroPrint("[CWA] No interfaces detected for analysis.\n");
         return;
@@ -2654,8 +2658,194 @@ std::vector<std::vector<double>> MDSimulation::compute_interface_paths(int n_gri
     return result;
 }
 
+std::vector<std::vector<double>> MDSimulation::compute_interface_paths_LG(int n_grid_y, double smoothing_sigma) {
+    std::vector<std::vector<double>> result;
+    if (cfg_manager.config.rank_idx != 0) return result;
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+    
+    int n_grid_x = static_cast<int>(n_grid_y * (Lx / Ly));
+    if (n_grid_x < 10) n_grid_x = 10;
+
+    std::vector<double> grid(n_grid_x * n_grid_y, 0.0);
+    double dx = Lx / n_grid_x;
+    double dy = Ly / n_grid_y;
+
+    // 1. Binning (scalar density field)
+    for (const auto& p : h_particles) {
+        int ix = static_cast<int>(p.pos.x / dx);
+        int iy = static_cast<int>(p.pos.y / dy);
+        ix = (ix % n_grid_x + n_grid_x) % n_grid_x;
+        iy = (iy % n_grid_y + n_grid_y) % n_grid_y;
+        grid[iy * n_grid_x + ix] += 1.0;
+    }
+
+    // 2. Gaussian smoothing along X (as in compute_interface_paths)
+    int passes = static_cast<int>(std::ceil(smoothing_sigma));
+    std::vector<double> temp_grid = grid;
+    
+    for (int p = 0; p < passes; ++p) {
+        std::vector<double> next_grid = temp_grid;
+        for (int y = 0; y < n_grid_y; ++y) {
+            for (int x = 0; x < n_grid_x; ++x) {
+                int xm = (x - 1 + n_grid_x) % n_grid_x;
+                int xp = (x + 1) % n_grid_x;
+                next_grid[y*n_grid_x + x] = 0.25*temp_grid[y*n_grid_x + xm] + 
+                                            0.50*temp_grid[y*n_grid_x + x] + 
+                                            0.25*temp_grid[y*n_grid_x + xp];
+            }
+        }
+        temp_grid = next_grid;
+    }
+
+    // 3. Build order parameter phi = density - mean_density
+    double sum_rho = 0.0;
+    for (double v : temp_grid) sum_rho += v;
+    const double mean_rho = sum_rho / static_cast<double>(n_grid_x * n_grid_y);
+
+    std::vector<double> phi(temp_grid.size());
+    for (std::size_t idx = 0; idx < temp_grid.size(); ++idx) {
+        phi[idx] = temp_grid[idx] - mean_rho;
+    }
+
+    // 4. Identify anchors from 1D projection of phi
+    std::vector<double> profile_1d(n_grid_x, 0.0);
+    for (int x = 0; x < n_grid_x; ++x) {
+        for (int y = 0; y < n_grid_y; ++y) {
+            profile_1d[x] += phi[y * n_grid_x + x];
+        }
+    }
+    
+    std::vector<double> anchors;
+    for (int x = 0; x < n_grid_x; ++x) {
+        int x_next = (x + 1) % n_grid_x;
+        if (profile_1d[x] * profile_1d[x_next] <= 0.0) {
+            anchors.push_back((x + 0.5) * dx);
+        }
+    }
+
+    if (anchors.size() > 2) {
+        anchors.resize(2);
+    } else if (anchors.empty()) {
+        return result;
+    }
+
+    // 5. Build paths per anchor using zero-crossings of phi
+    result.resize(anchors.size());
+
+    for (int k = 0; k < static_cast<int>(anchors.size()); ++k) {
+        double ref_loc = anchors[k];
+
+        std::vector<double> x_means(n_grid_y, 0.0);
+        std::vector<int> counts(n_grid_y, 0);
+
+        for (int y = 0; y < n_grid_y; ++y) {
+            for (int x = 0; x < n_grid_x; ++x) {
+                int idx = y * n_grid_x + x;
+                int idx_next = y * n_grid_x + (x + 1) % n_grid_x;
+                double v1 = phi[idx];
+                double v2 = phi[idx_next];
+
+                if (v1 * v2 <= 0.0 && v1 != v2) {
+                    double frac = std::abs(v1) / (std::abs(v1) + std::abs(v2));
+                    double cx = (x + frac) * dx;
+
+                    double dist = cx - ref_loc;
+                    while (dist > Lx / 2.0)  dist -= Lx;
+                    while (dist < -Lx / 2.0) dist += Lx;
+
+                    if (std::abs(dist) < Lx / 4.0) {
+                        x_means[y] += dist;
+                        counts[y]  += 1;
+                    }
+                }
+            }
+        }
+
+        std::vector<double> final_path_x(n_grid_y, 0.0);
+        std::vector<bool> valid(n_grid_y, false);
+
+        for (int y = 0; y < n_grid_y; ++y) {
+            if (counts[y] > 0) {
+                double avg_dx = x_means[y] / counts[y];
+                double abs_x  = ref_loc + avg_dx;
+                while (abs_x < 0.0)  abs_x += Lx;
+                while (abs_x >= Lx)  abs_x -= Lx;
+                final_path_x[y] = abs_x;
+                valid[y] = true;
+            }
+        }
+
+        int start_idx = -1;
+        for (int i = 0; i < n_grid_y; ++i) {
+            if (valid[i]) { start_idx = i; break; }
+        }
+
+        if (start_idx == -1) {
+            std::fill(final_path_x.begin(), final_path_x.end(), ref_loc);
+        } else {
+            double last_val = final_path_x[start_idx];
+            for (int i = 0; i < n_grid_y; ++i) {
+                int idx = (start_idx + i) % n_grid_y;
+                if (valid[idx]) last_val = final_path_x[idx];
+                else            final_path_x[idx] = last_val;
+            }
+            for (int i = 0; i < n_grid_y; ++i) {
+                int idx = (start_idx + i) % n_grid_y;
+                if (valid[idx]) last_val = final_path_x[idx];
+                else            final_path_x[idx] = last_val;
+            }
+        }
+
+        result[k] = std::move(final_path_x);
+    }
+
+    return result;
+}
+
 std::vector<std::vector<double>> MDSimulation::get_smooth_interface(int n_grid_y, double smoothing_sigma) {
     std::vector<std::vector<double>> paths = compute_interface_paths(n_grid_y, smoothing_sigma);
+    std::vector<std::vector<double>> result;
+    if (paths.empty()) {
+        return result;
+    }
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+    double dy = Ly / n_grid_y;
+
+    result.resize(paths.size());
+    for (size_t k = 0; k < paths.size(); ++k) {
+        const auto& path = paths[k];
+        if (path.empty()) continue;
+
+        std::vector<double> segs;
+        segs.reserve(path.size() * 4);
+        for (int y = 0; y < n_grid_y; ++y) {
+            double x1 = path[y];
+            double y1 = (y + 0.5) * dy;
+
+            int next_y = (y + 1) % n_grid_y;
+            double x2 = path[next_y];
+            double y2 = (y + 1.5) * dy;
+
+            double dist_x = std::abs(x2 - x1);
+            if (dist_x < Lx * 0.5) {
+                segs.push_back(x1);
+                segs.push_back(y1);
+                segs.push_back(x2);
+                segs.push_back(y2);
+            }
+        }
+        result[k] = std::move(segs);
+    }
+
+    return result;
+}
+
+std::vector<std::vector<double>> MDSimulation::get_smooth_interface_LG(int n_grid_y, double smoothing_sigma) {
+    std::vector<std::vector<double>> paths = compute_interface_paths_LG(n_grid_y, smoothing_sigma);
     std::vector<std::vector<double>> result;
     if (paths.empty()) {
         return result;
