@@ -20,6 +20,7 @@
 #include <optional>
 
 
+// Triangulation data on rank 0: expanded PBC vertices + triangle connectivity.
 struct TriangulationResult {
     // Flattened (x,y) coordinates used for triangulation (may include PBC images).
     std::vector<double> coords;
@@ -27,6 +28,22 @@ struct TriangulationResult {
     std::vector<int>    vertex_to_idx;
     // Triangle connectivity as indices into coords / vertex_to_idx.
     std::vector<std::array<int, 3>> triangles;
+};
+
+// AB pair “network” built from mixed A/B triangles: midpoints as nodes, segments as edges.
+struct ABPairNetworks {
+    struct Node {
+        double x;
+        double y;
+    };
+    struct Edge {
+        int node0;
+        int node1;
+    };
+
+    // Each entry is one connected network of midpoints and edges.
+    std::vector<std::vector<Node>> networks_nodes;
+    std::vector<std::vector<Edge>> networks_edges;
 };
 
 class MDSimulation {
@@ -59,6 +76,9 @@ class MDSimulation {
             bool is_plot,
             const std::string& filename,
             const std::string& csv_path);
+
+        // Rank 0 only: build A–B mid-segment networks from a triangulation (mixed A/B triangles → midpoint graphs).
+        ABPairNetworks get_AB_pair_network(const TriangulationResult& tri) const;
         
         std::vector<std::vector<double>> locate_interface(const delaunator::Delaunator& d);
         // Returns interface polylines as {x0, y0, x1, y1, ...} for each interface, empty if rank != 0 or none found

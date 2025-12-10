@@ -2101,6 +2101,189 @@ std::optional<TriangulationResult> MDSimulation::triangulation_plot(
     }
 }
 
+ABPairNetworks MDSimulation::get_AB_pair_network(const TriangulationResult& tri) const
+{
+    ABPairNetworks result;
+
+    if (cfg_manager.config.rank_idx != 0) {
+        return result;
+    }
+
+    const std::size_t vert_count = tri.vertex_to_idx.size();
+    if (vert_count == 0 || tri.triangles.empty()) {
+        return result;
+    }
+
+    // Helper to map midpoint coordinates to a unique node ID (with quantization).
+    const double scale = 1e8;
+    std::map<std::pair<long long, long long>, int> node_map;
+
+    std::vector<ABPairNetworks::Node> nodes;
+    std::vector<ABPairNetworks::Edge> edges;
+
+    auto get_node_id = [&](double x, double y) {
+        long long ix = static_cast<long long>(std::llround(x * scale));
+        long long iy = static_cast<long long>(std::llround(y * scale));
+        auto key = std::make_pair(ix, iy);
+        auto it = node_map.find(key);
+        if (it != node_map.end()) {
+            return it->second;
+        }
+        int id = static_cast<int>(nodes.size());
+        nodes.push_back(ABPairNetworks::Node{x, y});
+        node_map.emplace(key, id);
+        return id;
+    };
+
+    auto is_A = [](int t) { return t == 0; };
+    auto is_B = [](int t) { return t == 1; };
+
+    // Build segments from mixed A/B triangles.
+    for (const auto& tri_idx : tri.triangles) {
+        const int v0 = tri_idx[0];
+        const int v1 = tri_idx[1];
+        const int v2 = tri_idx[2];
+
+        if (v0 < 0 || v1 < 0 || v2 < 0 ||
+            v0 >= static_cast<int>(vert_count) ||
+            v1 >= static_cast<int>(vert_count) ||
+            v2 >= static_cast<int>(vert_count)) {
+            continue;
+        }
+
+        const int p0 = tri.vertex_to_idx[static_cast<std::size_t>(v0)];
+        const int p1 = tri.vertex_to_idx[static_cast<std::size_t>(v1)];
+        const int p2 = tri.vertex_to_idx[static_cast<std::size_t>(v2)];
+
+        if (p0 < 0 || p1 < 0 || p2 < 0 ||
+            p0 >= static_cast<int>(h_particles.size()) ||
+            p1 >= static_cast<int>(h_particles.size()) ||
+            p2 >= static_cast<int>(h_particles.size())) {
+            continue;
+        }
+
+        const int t0 = h_particles[p0].type;
+        const int t1 = h_particles[p1].type;
+        const int t2 = h_particles[p2].type;
+
+        const bool has_A = is_A(t0) || is_A(t1) || is_A(t2);
+        const bool has_B = is_B(t0) || is_B(t1) || is_B(t2);
+
+        // Skip pure-A or pure-B triangles.
+        if (!(has_A && has_B)) {
+            continue;
+        }
+
+        std::vector<int> mid_nodes;
+        mid_nodes.reserve(2);
+
+        auto process_edge = [&](int va, int vb, int ta, int tb) {
+            const bool a_is_A = is_A(ta);
+            const bool b_is_B = is_B(tb);
+            const bool a_is_B = is_B(ta);
+            const bool b_is_A = is_A(tb);
+
+            if (!((a_is_A && b_is_B) || (a_is_B && b_is_A))) {
+                return;
+            }
+
+            const double x_a = tri.coords[2 * static_cast<std::size_t>(va)];
+            const double y_a = tri.coords[2 * static_cast<std::size_t>(va) + 1];
+            const double x_b = tri.coords[2 * static_cast<std::size_t>(vb)];
+            const double y_b = tri.coords[2 * static_cast<std::size_t>(vb) + 1];
+
+            const double x_mid = 0.5 * (x_a + x_b);
+            const double y_mid = 0.5 * (y_a + y_b);
+
+            mid_nodes.push_back(get_node_id(x_mid, y_mid));
+        };
+
+        process_edge(v0, v1, t0, t1);
+        process_edge(v1, v2, t1, t2);
+        process_edge(v2, v0, t2, t0);
+
+        if (mid_nodes.size() == 2) {
+            edges.push_back(ABPairNetworks::Edge{mid_nodes[0], mid_nodes[1]});
+        }
+    }
+
+    if (nodes.empty() || edges.empty()) {
+        return result;
+    }
+
+    // Build adjacency for connected components.
+    std::vector<std::vector<int>> adj(nodes.size());
+    adj.assign(nodes.size(), {});
+    for (const auto& e : edges) {
+        if (e.node0 < 0 || e.node1 < 0 ||
+            e.node0 >= static_cast<int>(nodes.size()) ||
+            e.node1 >= static_cast<int>(nodes.size())) {
+            continue;
+        }
+        adj[e.node0].push_back(e.node1);
+        adj[e.node1].push_back(e.node0);
+    }
+
+    std::vector<int> comp_id(nodes.size(), -1);
+    int comp_count = 0;
+
+    for (int start = 0; start < static_cast<int>(nodes.size()); ++start) {
+        if (comp_id[start] != -1) {
+            continue;
+        }
+
+        // DFS stack
+        std::vector<int> stack;
+        stack.push_back(start);
+        comp_id[start] = comp_count;
+
+        while (!stack.empty()) {
+            int u = stack.back();
+            stack.pop_back();
+
+            for (int v : adj[u]) {
+                if (comp_id[v] == -1) {
+                    comp_id[v] = comp_count;
+                    stack.push_back(v);
+                }
+            }
+        }
+
+        ++comp_count;
+    }
+
+    if (comp_count == 0) {
+        return result;
+    }
+
+    result.networks_nodes.resize(comp_count);
+    result.networks_edges.resize(comp_count);
+
+    // Map from global node index to local index within its component.
+    std::vector<int> local_index(nodes.size(), -1);
+
+    for (int i = 0; i < static_cast<int>(nodes.size()); ++i) {
+        int cid = comp_id[i];
+        if (cid < 0) continue;
+        int local = static_cast<int>(result.networks_nodes[cid].size());
+        result.networks_nodes[cid].push_back(nodes[i]);
+        local_index[i] = local;
+    }
+
+    for (const auto& e : edges) {
+        int cid = comp_id[e.node0];
+        if (cid < 0 || cid != comp_id[e.node1]) {
+            continue;
+        }
+        int u = local_index[e.node0];
+        int v = local_index[e.node1];
+        if (u < 0 || v < 0) continue;
+        result.networks_edges[cid].push_back(ABPairNetworks::Edge{u, v});
+    }
+
+    return result;
+}
+
 void MDSimulation::plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho)
 {
     if (cfg_manager.config.rank_idx != 0) return;
