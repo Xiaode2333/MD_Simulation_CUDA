@@ -8,7 +8,11 @@
 #include "KerPredicates.h"
 #include "ThrustWrapper.h"
 
-#include "../../Visualizer.h"
+#include <thrust/gather.h>
+
+// Visualization is disabled in this build.
+// Keeping the include for reference:
+// #include "../../Visualizer.h"
 
 ////
 // GpuDel methods
@@ -253,7 +257,7 @@ void GpuDel::constructInitialTriangles()
 
     _availPtNum = _pointNum - 4; 
 
-    Visualizer::instance()->addFrame( _pointVec, SegmentDVec(), _triVec, _infIdx ); 
+    // Visualizer::instance()->addFrame( _pointVec, SegmentDVec(), _triVec, _infIdx );
 }
 
 void GpuDel::initForFlip()
@@ -662,24 +666,8 @@ void GpuDel::doInsertConstraints()
         if ( _input->isProfiling( ProfDiag ) )
             std::cout << "Iter " << ( outerLoop+1 ) << std::endl; 
 
-        // VISUALIZATION
-        if ( Visualizer::instance()->isEnable() ) 
-        {
-            pauseTiming( ProfNone ); 
-            pauseTiming( ProfDefault ); 
-
-            IntHVec triColorVec; 
-            _triConsVec.copyToHost( triColorVec ); 
-
-            for ( int i = 0; i < triColorVec.size(); ++i ) 
-                if ( triColorVec[i] != -1 ) 
-                    triColorVec[i] >>= 4; 
-
-            Visualizer::instance()->addFrame( _pointVec, _constraintVec, _triVec, triColorVec, _infIdx ); 
-
-            startTiming( ProfDefault ); 
-            startTiming( ProfNone ); 
-        }
+        // Visualization disabled in this build.
+        // if ( Visualizer::instance()->isEnable() ) { ... }
 
         // Collect active triangles
         thrust_copyIf_IsNotNegative( _triConsVec, _actTriVec ); 
@@ -690,24 +678,8 @@ void GpuDel::doInsertConstraints()
         {
             totFlipNum += flipNum; 
 
-            // VISUALIZATION
-            if ( Visualizer::instance()->isEnable() ) 
-            {
-                pauseTiming( ProfNone ); 
-                pauseTiming( ProfDefault ); 
-
-                IntHVec triColorVec; 
-                _triConsVec.copyToHost( triColorVec ); 
-
-                for ( int i = 0; i < triColorVec.size(); ++i ) 
-                    if ( triColorVec[i] != -1 ) 
-                        triColorVec[i] >>= 4; 
-
-                Visualizer::instance()->addFrame( _pointVec, _constraintVec, _triVec, triColorVec, _infIdx ); 
-
-                startTiming( ProfDefault ); 
-                startTiming( ProfNone ); 
-            }
+            // Visualization disabled in this build.
+            // if ( Visualizer::instance()->isEnable() ) { ... }
 
             ++flipLoop; 
             ++innerLoop; 
@@ -972,7 +944,7 @@ void GpuDel::splitTri()
 
     stopTiming( ProfDefault, _output->stats.splitTime ); 
 
-    Visualizer::instance()->addFrame( _pointVec, SegmentDVec(), _triVec, _infIdx ); 
+    // Visualizer::instance()->addFrame( _pointVec, SegmentDVec(), _triVec, _infIdx );
 
     return;
 }
@@ -1221,7 +1193,7 @@ bool GpuDel::doFlipping( CheckDelaunayMode checkMode )
         _timeFlipVec.push_back( _diagLog->_t[ 5 ] - prevTime ); 
 /////////////////////////////////////////////////////////////////////
 
-    Visualizer::instance()->addFrame( _pointVec, SegmentDVec(), _triVec, _infIdx ); 
+    // Visualizer::instance()->addFrame( _pointVec, SegmentDVec(), _triVec, _infIdx );
 
     return true;
 }

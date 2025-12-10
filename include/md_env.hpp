@@ -13,12 +13,21 @@
 #include <fmt/core.h>
 #include <thrust/device_vector.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <random>
 #include <delaunator-header-only.hpp>
 #include <optional>
 
 
+struct TriangulationResult {
+    // Flattened (x,y) coordinates used for triangulation (may include PBC images).
+    std::vector<double> coords;
+    // For each vertex in coords, index of the corresponding original particle in h_particles.
+    std::vector<int>    vertex_to_idx;
+    // Triangle connectivity as indices into coords / vertex_to_idx.
+    std::vector<std::array<int, 3>> triangles;
+};
 
 class MDSimulation {
     public:
@@ -46,7 +55,10 @@ class MDSimulation {
         
         void sample_collect();
 
-        std::optional<delaunator::Delaunator> triangulation_plot(bool is_plot, const std::string& filename, const std::string& csv_path, const std::vector<double>& rho);
+        std::optional<TriangulationResult> triangulation_plot(
+            bool is_plot,
+            const std::string& filename,
+            const std::string& csv_path);
         
         std::vector<std::vector<double>> locate_interface(const delaunator::Delaunator& d);
         // Returns interface polylines as {x0, y0, x1, y1, ...} for each interface, empty if rank != 0 or none found

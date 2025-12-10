@@ -1,4 +1,6 @@
-#define WINDOWS_VISUALIZATION
+// Visualization is disabled in this build.
+// Original macro kept for reference:
+// #define WINDOWS_VISUALIZATION
 
 #include <iomanip>
 
@@ -14,9 +16,9 @@
     #include <Windows.h>
 #endif
 
-#ifdef WINDOWS_VISUALIZATION
-    #include "Visualizer.h"
-#endif
+// #ifdef WINDOWS_VISUALIZATION
+//     #include "Visualizer.h"
+// #endif
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -77,10 +79,10 @@ public:
         CudaSafeCall( cudaSetDevice( deviceIdx ) );
         CudaSafeCall( cudaDeviceReset() );
 
-#ifdef WINDOWS_VISUALIZATION
-	    // Pause for visualizing only final result
-		Visualizer::instance()->pause(); 
-#endif
+// #ifdef WINDOWS_VISUALIZATION
+// 	    // Pause for visualizing only final result
+// 		Visualizer::instance()->pause(); 
+// #endif
 
         GpuDel gpuDel; 
 
@@ -137,11 +139,11 @@ public:
             ++_seed;
         }
 
-#ifdef WINDOWS_VISUALIZATION
-        // Simple visualization, just show the end result
-		Visualizer::instance()->resume(); 
-        Visualizer::instance()->addFrame( _input.pointVec, _input.constraintVec, _output.triVec ); 
-#endif
+// #ifdef WINDOWS_VISUALIZATION
+//         // Simple visualization, just show the end result
+// 		Visualizer::instance()->resume(); 
+//         Visualizer::instance()->addFrame( _input.pointVec, _input.constraintVec, _output.triVec ); 
+// #endif
 
     }
 
@@ -267,12 +269,12 @@ void parseCommandline( int argc, char* argv[], App &app )
         {
             app._input.noReorder = true;
         }
-#ifdef WINDOWS_VISUALIZATION
-        else if ( 0 == std::string( "-noViz" ).compare( argv[ idx ] ) )
-        {
-            Visualizer::instance()->disable(); 
-        }
-#endif
+// #ifdef WINDOWS_VISUALIZATION
+//         else if ( 0 == std::string( "-noViz" ).compare( argv[ idx ] ) )
+//         {
+//             Visualizer::instance()->disable(); 
+//         }
+// #endif
         else if ( 0 == std::string( "-profiling" ).compare( argv[ idx ] ) )
         {
             app._input.profLevel = ProfDetail;
@@ -306,35 +308,35 @@ int main( int argc, char* argv[] )
 
     parseCommandline( argc, argv, app ); 
 
-#ifdef WINDOWS_VISUALIZATION
-    // Visualization
-    Visualizer *vis = Visualizer::instance(); 
-
-    if ( vis->isEnable() ) 
-    {
-        // Move the console window to the right side of the visualization window
-//        RECT rect; 
-//        HWND hWnd = GetConsoleWindow(); 
-//        GetWindowRect( hWnd, &rect ); 
-//        MoveWindow( hWnd, vis->getWidth() + 15, 0, 
-//            rect.right - rect.left, rect.bottom - rect.top, true ); 
-
-        vis->init( argc, argv, "gDel2D-visualization" ); 
-        vis->printHelp(); 
-    }
-#else
-    Visualizer::instance()->disable(); 
-#endif
+// #ifdef WINDOWS_VISUALIZATION
+//     // Visualization
+//     Visualizer *vis = Visualizer::instance(); 
+//
+//     if ( vis->isEnable() ) 
+//     {
+//         // Move the console window to the right side of the visualization window
+// //        RECT rect; 
+// //        HWND hWnd = GetConsoleWindow(); 
+// //        GetWindowRect( hWnd, &rect ); 
+// //        MoveWindow( hWnd, vis->getWidth() + 15, 0, 
+// //            rect.right - rect.left, rect.bottom - rect.top, true ); 
+//
+//         vis->init( argc, argv, "gDel2D-visualization" ); 
+//         vis->printHelp(); 
+//     }
+// #else
+//     Visualizer::instance()->disable(); 
+// #endif
 
     // Run test
     app.run(); 
 
     summarize( app ); 
 
-#ifdef WINDOWS_VISUALIZATION
-    // Visualize
-    vis->run(); 
-#endif
+// #ifdef WINDOWS_VISUALIZATION
+//     // Visualize
+//     vis->run(); 
+// #endif
 
     return 0;
 }

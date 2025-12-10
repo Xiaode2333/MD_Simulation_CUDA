@@ -96,6 +96,10 @@ set(SRC_DIR     "${PROJECT_ROOT}/src")
 set(TESTS_DIR   "${PROJECT_ROOT}/tests")
 set(RUNS_DIR   "${PROJECT_ROOT}/run")
 
+# ---- External libraries ----
+# Build the GPU 2D Delaunay triangulation package (gDel2D)
+add_subdirectory(external/gDel2D-Oct2015)
+
 # ---- Sources ----
 file(GLOB_RECURSE PROJECT_HEADERS "${INCLUDE_DIR}/*.hpp")
 file(GLOB_RECURSE PROJECT_SOURCES "${SRC_DIR}/*.cpp")
@@ -126,6 +130,7 @@ target_link_libraries(md_particle_lib
         fmt::fmt
         Python3::Python
         nlohmann_json::nlohmann_json
+        gdel2d_lib
         MPI::MPI_CXX
         ZLIB::ZLIB
 )

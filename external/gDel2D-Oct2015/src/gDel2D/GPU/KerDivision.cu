@@ -481,6 +481,13 @@ TriOpp*      oppArr
     }
 }
 
+__forceinline__ __device__ float int_as_float( int k )
+{
+    union { int i; float f; } u;
+    u.i = k;
+    return u.f;
+}
+
 __forceinline__ __device__ float hash( int k ) 
 {
     k *= 357913941;

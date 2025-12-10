@@ -87,20 +87,16 @@ int main(){
                 // std::string csv_path = csv_dir + fmt::format("frame_step_{}.csv", step);
 
                 std::string frame_triangulation_path = frame_dir + fmt::format("triangulation_frame_step_{}.svg", step);
-                std::string csv_path_triangulation = csv_dir + fmt::format("triangulation_frame_step_{}.csv", step);
+                std::string csv_path_triangulation   = csv_dir + fmt::format("triangulation_frame_step_{}.csv", step);
 
                 // std::string frame_interface_path = interface_dir + fmt::format("interface_step_{}.svg", step);
                 // std::string csv_path_interface = csv_dir + fmt::format("interface_step_{}.csv", step);
-
-                int n_bins_per_rank = 32;
-                std::vector<double> density_profile = sim.get_density_profile(n_bins_per_rank);
-                // RankZeroPrint(rank_idx, "[Step] {}. Density Profile (rho): {}\n", step, density_profile);
 
                 // RankZeroPrint(rank_idx, "[Step] {}. plot_particles.\n", step);
                 // sim.plot_particles(frame_path, csv_path);
                 
                 RankZeroPrint(rank_idx, "[Step] {}. triangulation_plot.\n", step);
-                sim.triangulation_plot(true, frame_triangulation_path, csv_path_triangulation, density_profile);
+                sim.triangulation_plot(true, frame_triangulation_path, csv_path_triangulation);
                 
                 // RankZeroPrint(rank_idx, "[Step] {}. plot_interfaces.\n", step);
                 // sim.plot_interfaces(frame_interface_path, csv_path_interface, density_profile);

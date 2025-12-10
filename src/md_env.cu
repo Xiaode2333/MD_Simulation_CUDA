@@ -1,4 +1,7 @@
 #include "md_env.hpp"
+
+// GPU Delaunay triangulation (gDel2D)
+#include "external/gDel2D-Oct2015/src/gDel2D/GpuDelaunay.h"
 #include "md_particle.hpp"
 #include "md_config.hpp"
 #include "md_common.hpp"
@@ -1953,7 +1956,10 @@ void _build_interface_coords(
     }
 }
 
-std::optional<delaunator::Delaunator> MDSimulation::triangulation_plot(bool is_plot, const std::string& filename, const std::string& csv_path, const std::vector<double>& rho)
+std::optional<TriangulationResult> MDSimulation::triangulation_plot(
+    bool is_plot,
+    const std::string& filename,
+    const std::string& csv_path)
 {
     if (cfg_manager.config.rank_idx != 0) {
         return std::nullopt;
@@ -1964,35 +1970,49 @@ std::optional<delaunator::Delaunator> MDSimulation::triangulation_plot(bool is_p
     const double Ly = cfg.box_h_global;
 
     double sigma_max = std::max({cfg.SIGMA_AA, cfg.SIGMA_BB, cfg.SIGMA_AB});
-    
-    // Define w = 10 * cutoff * sigma_max
-    double w = 10.0 * cfg.cutoff * sigma_max;
-    
-    // Use w for both dimensions as requested
-    double width_x = w;
-    double width_y = w;
+    const double w   = 3.0 * cfg.cutoff * sigma_max;
 
-    std::vector<double> interfaces;
-    if (!rho.empty()) {
-        const int N_bins = static_cast<int>(rho.size());
-        if (N_bins > 0) {
-            const double dx = Lx / static_cast<double>(N_bins);
-            for (int i = 0; i < N_bins; ++i) {
-                int idx_left  = (i - 1 + N_bins) % N_bins;
-                int idx_right = (i + 1) % N_bins;
+    // Build a PBC-expanded point set in a band of width w around the box.
+    coords.clear();
+    vertex_to_idx.clear();
 
-                if (rho[idx_left] * rho[idx_right] <= 0.0) {
-                    double x_loc = (i + 0.5) * dx; 
-                    interfaces.push_back(x_loc);
-                }
-            }
-        }
+    const int n_particles = static_cast<int>(h_particles.size());
+
+    // Fast path: fill base positions in a single pass without repeated push_back.
+    coords.resize(static_cast<std::size_t>(2 * n_particles));
+    vertex_to_idx.resize(static_cast<std::size_t>(n_particles));
+
+    for (int i = 0; i < n_particles; ++i) {
+        coords[2 * i]     = h_particles[i].pos.x;
+        coords[2 * i + 1] = h_particles[i].pos.y;
+        vertex_to_idx[i]  = i;
     }
 
-    _build_interface_coords(
-        h_particles, Lx, Ly, interfaces, width_x, width_y,
-        coords, vertex_to_idx 
-    );
+    auto add_vertex = [&](int particle_idx, double x, double y) {
+        coords.push_back(x);
+        coords.push_back(y);
+        vertex_to_idx.push_back(particle_idx);
+    };
+
+    // Add only PBC images near the boundaries; base points are already populated.
+    for (int i = 0; i < n_particles; ++i) {
+        const double x0 = h_particles[i].pos.x;
+        const double y0 = h_particles[i].pos.y;
+
+        // Periodic images near boundaries in X
+        if (x0 < w)         add_vertex(i, x0 + Lx, y0);
+        if (x0 > Lx - w)    add_vertex(i, x0 - Lx, y0);
+
+        // Periodic images near boundaries in Y
+        if (y0 < w)         add_vertex(i, x0, y0 + Ly);
+        if (y0 > Ly - w)    add_vertex(i, x0, y0 - Ly);
+
+        // Corner combinations
+        if (x0 < w && y0 < w)                 add_vertex(i, x0 + Lx, y0 + Ly);
+        if (x0 < w && y0 > Ly - w)            add_vertex(i, x0 + Lx, y0 - Ly);
+        if (x0 > Lx - w && y0 < w)            add_vertex(i, x0 - Lx, y0 + Ly);
+        if (x0 > Lx - w && y0 > Ly - w)       add_vertex(i, x0 - Lx, y0 - Ly);
+    }
 
     if (coords.size() < 6) {
         if (is_plot) {
@@ -2002,17 +2022,81 @@ std::optional<delaunator::Delaunator> MDSimulation::triangulation_plot(bool is_p
     }
 
     try {
-        delaunator::Delaunator d(coords);
+        // Use GPU-based Delaunay triangulation (gDel2D).
+        GDel2DInput  input;
+        GDel2DOutput output;
+
+        const std::size_t n_points = coords.size() / 2;
+        input.pointVec.clear();
+        input.pointVec.reserve(n_points);
+        input.constraintVec.clear();
+
+        for (std::size_t i = 0; i < n_points; ++i) {
+            Point2 p;
+            p._p[0] = static_cast<RealType>(coords[2 * i]);
+            p._p[1] = static_cast<RealType>(coords[2 * i + 1]);
+            input.pointVec.push_back(p);
+        }
+
+        // Keep original point order; profiling off.
+        input.insAll    = false;
+        input.noSort    = true;
+        input.noReorder = true;
+        input.profLevel = ProfNone;
+
+        GpuDel gpuDel;
+        gpuDel.compute(input, &output);
+
+        const int infIdx = static_cast<int>(input.pointVec.size());
+        std::vector<std::array<double, 6>> triangles_xy;
+        triangles_xy.reserve(output.triVec.size());
+
+        std::vector<std::array<int, 3>> triangles_idx;
+        triangles_idx.reserve(output.triVec.size());
+
+        for (const Tri& t : output.triVec) {
+            if (t._v[0] == infIdx || t._v[1] == infIdx || t._v[2] == infIdx) {
+                continue; // skip triangles incident to infinity point
+            }
+
+            const Point2& p0 = input.pointVec[t._v[0]];
+            const Point2& p1 = input.pointVec[t._v[1]];
+            const Point2& p2 = input.pointVec[t._v[2]];
+            const double x0 = static_cast<double>(p0._p[0]);
+            const double y0 = static_cast<double>(p0._p[1]);
+            const double x1 = static_cast<double>(p1._p[0]);
+            const double y1 = static_cast<double>(p1._p[1]);
+            const double x2 = static_cast<double>(p2._p[0]);
+            const double y2 = static_cast<double>(p2._p[1]);
+
+            const auto in_base_box = [&](double x, double y) {
+                return (x >= 0.0 && x < Lx && y >= 0.0 && y < Ly);
+            };
+
+            // Drop triangles whose all three vertices lie outside the base box.
+            if (!(in_base_box(x0, y0) || in_base_box(x1, y1) || in_base_box(x2, y2))) {
+                continue;
+            }
+
+            triangles_xy.push_back({x0, y0, x1, y1, x2, y2});
+            triangles_idx.push_back({t._v[0], t._v[1], t._v[2]});
+        }
 
         if (is_plot) {
-            plot_triangulation_python(
-                h_particles, d, filename, csv_path,
+            plot_triangulation_python_from_triangles(
+                h_particles, triangles_xy, filename, csv_path,
                 Lx, Ly, cfg.SIGMA_AA, cfg.SIGMA_BB
             );
         }
-        return d;
+
+        TriangulationResult result;
+        result.coords         = coords;
+        result.vertex_to_idx  = vertex_to_idx;
+        result.triangles      = std::move(triangles_idx);
+
+        return result;
     } catch (const std::exception& e) {
-        RankZeroPrint("[Warning] Triangulation failed (likely collinear points). Skipping plot. Reason: {}\n", e.what());
+        RankZeroPrint("[Warning] GPU triangulation failed. Skipping plot. Reason: {}\n", e.what());
         return std::nullopt;
     }
 }

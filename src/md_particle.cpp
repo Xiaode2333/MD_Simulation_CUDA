@@ -84,13 +84,15 @@ void print_particles_csv(const std::vector<Particle>& particles,
     }
 }
 
-void print_triangulation_csv(const std::vector<Particle>& particles,
-                             const delaunator::Delaunator& triangulation,
-                             const std::string& csv_name,
-                             double box_w,
-                             double box_h,
-                             double sigma_aa,
-                             double sigma_bb)
+namespace {
+
+void print_triangulation_csv_impl(const std::vector<Particle>& particles,
+                                  const std::vector<std::array<double, 6>>& triangles,
+                                  const std::string& csv_name,
+                                  double box_w,
+                                  double box_h,
+                                  double sigma_aa,
+                                  double sigma_bb)
 {
     if (csv_name.empty()) {
         throw std::invalid_argument("print_triangulation_csv: csv_name must not be empty");
@@ -114,36 +116,6 @@ void print_triangulation_csv(const std::vector<Particle>& particles,
         if (resolved_box_h <= 0.0) {
             resolved_box_h = 1.0;
         }
-    }
-
-    const auto in_base_box = [resolved_box_w, resolved_box_h](double x, double y) {
-        return (x >= 0.0 && x < resolved_box_w && y >= 0.0 && y < resolved_box_h);
-    };
-
-    std::vector<std::array<double, 6>> triangles;
-    triangles.reserve(triangulation.triangles.size() / 3);
-
-    for (std::size_t t = 0; t + 2 < triangulation.triangles.size(); t += 3) {
-        const std::size_t i0 = triangulation.triangles[t];
-        const std::size_t i1 = triangulation.triangles[t + 1];
-        const std::size_t i2 = triangulation.triangles[t + 2];
-
-        const double x0 = triangulation.coords[2 * i0];
-        const double y0 = triangulation.coords[2 * i0 + 1];
-        const double x1 = triangulation.coords[2 * i1];
-        const double y1 = triangulation.coords[2 * i1 + 1];
-        const double x2 = triangulation.coords[2 * i2];
-        const double y2 = triangulation.coords[2 * i2 + 1];
-
-        const bool inside0 = in_base_box(x0, y0);
-        const bool inside1 = in_base_box(x1, y1);
-        const bool inside2 = in_base_box(x2, y2);
-
-        if (!(inside0 || inside1 || inside2)) {
-            continue;
-        }
-
-        triangles.push_back({x0, y0, x1, y1, x2, y2});
     }
 
     std::ofstream out(csv_name, std::ios::trunc);
@@ -180,6 +152,78 @@ void print_triangulation_csv(const std::vector<Particle>& particles,
     if (!out) {
         throw std::runtime_error("Failed to write triangulation CSV: " + csv_name);
     }
+}
+
+} // namespace
+
+void print_triangulation_csv(const std::vector<Particle>& particles,
+                             const delaunator::Delaunator& triangulation,
+                             const std::string& csv_name,
+                             double box_w,
+                             double box_h,
+                             double sigma_aa,
+                             double sigma_bb)
+{
+    const auto in_base_box = [&particles, box_w, box_h](double x, double y) {
+        double resolved_box_w = box_w;
+        double resolved_box_h = box_h;
+
+        if (resolved_box_w <= 0.0 || resolved_box_h <= 0.0) {
+            const Extents ext = compute_extents(particles);
+            if (resolved_box_w <= 0.0) {
+                resolved_box_w = particles.empty() ? 1.0 : (ext.max_x - ext.min_x);
+                if (resolved_box_w <= 0.0) resolved_box_w = 1.0;
+            }
+            if (resolved_box_h <= 0.0) {
+                resolved_box_h = particles.empty() ? 1.0 : (ext.max_y - ext.min_y);
+                if (resolved_box_h <= 0.0) resolved_box_h = 1.0;
+            }
+        }
+
+        return (x >= 0.0 && x < resolved_box_w && y >= 0.0 && y < resolved_box_h);
+    };
+
+    std::vector<std::array<double, 6>> triangles;
+    triangles.reserve(triangulation.triangles.size() / 3);
+
+    for (std::size_t t = 0; t + 2 < triangulation.triangles.size(); t += 3) {
+        const std::size_t i0 = triangulation.triangles[t];
+        const std::size_t i1 = triangulation.triangles[t + 1];
+        const std::size_t i2 = triangulation.triangles[t + 2];
+
+        const double x0 = triangulation.coords[2 * i0];
+        const double y0 = triangulation.coords[2 * i0 + 1];
+        const double x1 = triangulation.coords[2 * i1];
+        const double y1 = triangulation.coords[2 * i1 + 1];
+        const double x2 = triangulation.coords[2 * i2];
+        const double y2 = triangulation.coords[2 * i2 + 1];
+
+        const bool inside0 = in_base_box(x0, y0);
+        const bool inside1 = in_base_box(x1, y1);
+        const bool inside2 = in_base_box(x2, y2);
+
+        if (!(inside0 || inside1 || inside2)) {
+            continue;
+        }
+
+        triangles.push_back({x0, y0, x1, y1, x2, y2});
+    }
+
+    print_triangulation_csv_impl(
+        particles, triangles, csv_name, box_w, box_h, sigma_aa, sigma_bb);
+}
+
+void print_triangulation_csv_from_triangles(
+    const std::vector<Particle>& particles,
+    const std::vector<std::array<double, 6>>& triangles,
+    const std::string& csv_name,
+    double box_w,
+    double box_h,
+    double sigma_aa,
+    double sigma_bb)
+{
+    print_triangulation_csv_impl(
+        particles, triangles, csv_name, box_w, box_h, sigma_aa, sigma_bb);
 }
 
 void plot_particles_python(const std::vector<Particle>& particles,
@@ -227,6 +271,43 @@ void plot_triangulation_python(const std::vector<Particle>& particles,
     print_triangulation_csv(
         particles,
         triangulation,
+        csv_path,
+        box_w,
+        box_h,
+        sigma_aa,
+        sigma_bb);
+
+    const std::string command =
+        "python ./python/plot_triangulation_python.py --csv_name \"" + csv_path +
+        "\" --output_name \"" + filename + "\"";
+
+    const int status = std::system(command.c_str());
+    if (status != 0) {
+        throw std::runtime_error(
+            "plot_triangulation_python.py failed with status " + std::to_string(status));
+    }
+}
+
+void plot_triangulation_python_from_triangles(
+    const std::vector<Particle>& particles,
+    const std::vector<std::array<double, 6>>& triangles,
+    const std::string& filename,
+    const std::string& csv_path,
+    const double box_w,
+    const double box_h,
+    const double sigma_aa,
+    const double sigma_bb)
+{
+    if (filename.empty()) {
+        throw std::invalid_argument("plot_triangulation_python_from_triangles: filename must not be empty");
+    }
+    if (csv_path.empty()) {
+        throw std::invalid_argument("plot_triangulation_python_from_triangles: csv_path must not be empty");
+    }
+
+    print_triangulation_csv_from_triangles(
+        particles,
+        triangles,
         csv_path,
         box_w,
         box_h,

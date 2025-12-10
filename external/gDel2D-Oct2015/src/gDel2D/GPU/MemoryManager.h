@@ -92,18 +92,10 @@ public:
         _capacity   = ( n == 0 ) ? 1 : n; 
         _owned      = true; 
 
-        try
-        {
-            _ptr = thrust::device_malloc< T >( _capacity );
-        }
-        catch( ... )
-        {
-            // output an error message and exit
-            const int OneMB = ( 1 << 20 );
-            std::cerr << "thrust::device_malloc failed to allocate " << ( sizeof( T ) * _capacity ) / OneMB << " MB!" << std::endl;
-            std::cerr << "size = " << _size << " sizeof(T) = " << sizeof( T ) << std::endl; 
-            exit( -1 );
-        }
+        T* rawPtr = nullptr;
+        CudaSafeCall( cudaMalloc( reinterpret_cast<void**>( &rawPtr ),
+                                  _capacity * sizeof( T ) ) );
+        _ptr = thrust::device_pointer_cast( rawPtr );
 
         return;
     }
