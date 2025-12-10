@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_ROOT="results/20251209_partial_U_lambda_series"
+BASE_ROOT="results/20251210_LG_series"
 ORI_CONFIG="${BASE_ROOT}/config.json"
 
 if [ ! -f "$ORI_CONFIG" ]; then
@@ -10,14 +10,6 @@ if [ ! -f "$ORI_CONFIG" ]; then
     exit 1
 fi
 
-#
-# One-time configure + build for this commit.
-# All submitted jobs will reuse the same binary in a
-# commit-specific build directory under ./build_slurm_tmp/.
-# (Avoid 'module reset' here because on this cluster it
-# tries to call 'conda' before it exists, which breaks
-# when this script is run with 'set -e'.)
-#
 module load StdEnv
 module load GCCcore/13.3.0
 module load CUDA/12.6.0
@@ -30,13 +22,10 @@ module load git/2.45.1-GCCcore-13.3.0
 module load CMake/3.29.3-GCCcore-13.3.0
 module load nlohmann_json/3.11.3-GCCcore-13.3.0
 
-# module list
-
 export CUDA_HOME="/apps/software/2024a/software/CUDA/12.6.0"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 
-# Source conda profile directly to ensure 'conda' command exists
 conda init
 source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate py3
@@ -53,7 +42,7 @@ if ! GIT_HASH=$(git rev-parse HEAD 2>/dev/null); then
 fi
 
 BUILD_ROOT="./build_slurm_tmp/build_${GIT_HASH}"
-SERIES_BIN="${BUILD_ROOT}/run_series_partial_U_lambda_test"
+SERIES_BIN="${BUILD_ROOT}/run_series_LiquidGas"
 
 mkdir -p "$BUILD_ROOT"
 
@@ -69,25 +58,24 @@ if [ ! -f "${BUILD_ROOT}/CMakeCache.txt" ] || [ ! -x "$SERIES_BIN" ]; then
         -DPython3_EXECUTABLE="$PY_EXEC" \
         -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    cmake --build "$BUILD_ROOT" -j --target run_series_partial_U_lambda_test
+    cmake --build "$BUILD_ROOT" -j --target run_series_LiquidGas
 else
     echo "[INFO] Reusing existing build in '${BUILD_ROOT}' for commit ${GIT_HASH}."
 fi
-
 
 # Temperatures from 0.5 to 1.0 (inclusive) in steps of 0.1
 for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
     T_DIR="${BASE_ROOT}/T_${T}"
     mkdir -p "$T_DIR"
 
-    # Lambdas: 0.0, 0.1, ..., 1.0 (11 points)
+    # Lambdas: 0.05, 0.15, ..., 0.95
     for lambda in 0.05 0.15 0.25 0.35 0.45 0.55 0.65 0.75 0.85 0.95; do
         LAMBDA_DIR="${T_DIR}/lambda_${lambda}"
         mkdir -p "$LAMBDA_DIR"
 
         echo "Submitting T=${T}, lambda=${lambda} into ${LAMBDA_DIR}"
-        sbatch --job-name="T${T}_lambda${lambda}" \
-            scripts/run_series_partial_U_lambda.sh \
+        sbatch --job-name="LG_T${T}_lambda${lambda}" \
+            scripts/run_series_LiquidGas.sh \
             "$LAMBDA_DIR" \
             "$ORI_CONFIG" \
             "$SERIES_BIN" \
@@ -95,3 +83,4 @@ for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
             "lambda-deform=${lambda}"
     done
 done
+

@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
         n_record_interval = 1;
     }
 
-    const int n_steps = 300'000;
+    const int n_steps = 500'000;
     const int q_min = 3;
     const int q_max = 10;
     const int n_bins_local = 32;
