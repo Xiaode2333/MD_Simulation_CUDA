@@ -42,7 +42,8 @@ target_link_libraries(${PROJECT_NAME}
     gdel2d_lib
 )
 
-set(CMAKE_VERBOSE_MAKEFILE "ON")
+# Keep CMake output non-verbose to avoid noisy build logs.
+set(CMAKE_VERBOSE_MAKEFILE "OFF")
 
 # When visualization is enabled, link against OpenGL / GLEW / GLUT:
 # target_link_libraries(${PROJECT_NAME} ${OPENGL_LIBRARIES} ${GLEW_LIBRARIES} ${GLUT_LIBRARIES})

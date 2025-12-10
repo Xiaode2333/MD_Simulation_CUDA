@@ -58,7 +58,7 @@ if [ ! -f "${BUILD_ROOT}/CMakeCache.txt" ] || [ ! -x "$SERIES_BIN" ]; then
         -DPython3_EXECUTABLE="$PY_EXEC" \
         -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    cmake --build "$BUILD_ROOT" -j --target run_series_LiquidGas
+    cmake --build "$BUILD_ROOT" -j --target run_series_LiquidGas --quiet
 else
     echo "[INFO] Reusing existing build in '${BUILD_ROOT}' for commit ${GIT_HASH}."
 fi
@@ -83,4 +83,3 @@ for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
             "lambda-deform=${lambda}"
     done
 done
-

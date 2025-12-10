@@ -82,7 +82,6 @@ class MDSimulation {
         
         std::vector<std::vector<double>> locate_interface(const delaunator::Delaunator& d);
         // Returns interface polylines as {x0, y0, x1, y1, ...} for each interface, empty if rank != 0 or none found
-        std::vector<std::vector<double>> get_smooth_interface(int n_grid_y, double smoothing_sigma);
         void do_CWA_instant(int q_min, int q_max, const std::string& csv_path, const std::string& plot_path, bool is_plot, int step, bool is_LG = false);
 
         void plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho, bool is_LG = false);
