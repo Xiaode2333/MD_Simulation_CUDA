@@ -58,7 +58,8 @@ if [ ! -f "${BUILD_ROOT}/CMakeCache.txt" ] || [ ! -x "$SERIES_BIN" ]; then
         -DPython3_EXECUTABLE="$PY_EXEC" \
         -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    cmake --build "$BUILD_ROOT" -j --target run_series_LiquidGas --quiet
+    # Suppress normal build progress on stdout; keep warnings/errors on stderr.
+    cmake --build "$BUILD_ROOT" -j --target run_series_LiquidGas > /dev/null
 else
     echo "[INFO] Reusing existing build in '${BUILD_ROOT}' for commit ${GIT_HASH}."
 fi
