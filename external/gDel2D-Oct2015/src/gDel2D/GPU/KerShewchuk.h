@@ -4,6 +4,11 @@
 
 #pragma once
 
+// Suppress NVCC "variable declared but never referenced" warnings from this header only.
+#ifdef __CUDACC__
+#pragma diag_suppress 177
+#endif
+
 /*****************************************************************************/
 /*                                                                           */
 /*  Routines for Arbitrary Precision Floating-point Arithmetic               */

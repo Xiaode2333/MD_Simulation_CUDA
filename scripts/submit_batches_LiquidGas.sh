@@ -26,7 +26,6 @@ export CUDA_HOME="/apps/software/2024a/software/CUDA/12.6.0"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 
-conda init
 source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate py3
 
@@ -58,8 +57,8 @@ if [ ! -f "${BUILD_ROOT}/CMakeCache.txt" ] || [ ! -x "$SERIES_BIN" ]; then
         -DPython3_EXECUTABLE="$PY_EXEC" \
         -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    # Suppress normal build progress on stdout; keep warnings/errors on stderr.
-    cmake --build "$BUILD_ROOT" -j --target run_series_LiquidGas > /dev/null
+    # Build with normal CMake progress output; gDel2D verbosity is already reduced via CMAKE_VERBOSE_MAKEFILE=OFF.
+    cmake --build "$BUILD_ROOT" -j --target run_series_LiquidGas
 else
     echo "[INFO] Reusing existing build in '${BUILD_ROOT}' for commit ${GIT_HASH}."
 fi
@@ -69,8 +68,7 @@ for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
     T_DIR="${BASE_ROOT}/T_${T}"
     mkdir -p "$T_DIR"
 
-    # Lambdas: 0.05, 0.15, ..., 0.95
-    for lambda in 0.05 0.15 0.25 0.35 0.45 0.55 0.65 0.75 0.85 0.95; do
+    for lambda in 0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0; do
         LAMBDA_DIR="${T_DIR}/lambda_${lambda}"
         mkdir -p "$LAMBDA_DIR"
 
