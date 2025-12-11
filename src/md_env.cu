@@ -16,6 +16,8 @@
 #include <memory>
 #include <cstdlib>
 #include <cmath>
+#include <algorithm>
+#include <array>
 
 MDSimulation::MDSimulation(MDConfigManager config_manager, MPI_Comm comm) {
     this->cfg_manager = config_manager;
@@ -2369,8 +2371,6 @@ void MDSimulation::plot_interfaces(const std::string& filename, const std::strin
 {
     if (cfg_manager.config.rank_idx != 0) return;
 
-    RankZeroPrint("[DEBUG] Generating smooth interface (Grid Method)...\n");
-
     // Resolution: Use ~1.0 sigma resolution for fine enough detail to see waves,
     // but coarse enough that smoothing works.
     int n_grid_y = static_cast<int>(cfg_manager.config.box_h_global / 2.0); 
@@ -2386,8 +2386,6 @@ void MDSimulation::plot_interfaces(const std::string& filename, const std::strin
         cfg_manager.config.box_w_global, cfg_manager.config.box_h_global,
         cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_BB
     );
-    
-    RankZeroPrint("[DEBUG] plot_interfaces finished.\n");
 }
 
 double MDSimulation::get_interface_total_length(bool is_LG)
@@ -2817,106 +2815,145 @@ std::vector<std::vector<double>> MDSimulation::compute_interface_paths_LG(int n_
         temp_grid = next_grid;
     }
 
-    // 3. Build order parameter phi = density - mean_density
-    double sum_rho = 0.0;
-    for (double v : temp_grid) sum_rho += v;
-    const double mean_rho = sum_rho / static_cast<double>(n_grid_x * n_grid_y);
+    auto circular_distance = [Lx](double a, double b) {
+        double d = std::abs(a - b);
+        return std::min(d, Lx - d);
+    };
 
-    std::vector<double> phi(temp_grid.size());
-    for (std::size_t idx = 0; idx < temp_grid.size(); ++idx) {
-        phi[idx] = temp_grid[idx] - mean_rho;
-    }
-
-    // 4. Identify anchors from 1D projection of phi
-    std::vector<double> profile_1d(n_grid_x, 0.0);
-    for (int x = 0; x < n_grid_x; ++x) {
-        for (int y = 0; y < n_grid_y; ++y) {
-            profile_1d[x] += phi[y * n_grid_x + x];
+    auto choose_two_crossings = [&](const std::vector<double>& crossings) -> std::array<double, 2> {
+        if (crossings.empty()) {
+            return {0.0, Lx * 0.5};
         }
-    }
-    
-    std::vector<double> anchors;
-    for (int x = 0; x < n_grid_x; ++x) {
-        int x_next = (x + 1) % n_grid_x;
-        if (profile_1d[x] * profile_1d[x_next] <= 0.0) {
-            anchors.push_back((x + 0.5) * dx);
+        if (crossings.size() == 1) {
+            return {crossings[0], std::fmod(crossings[0] + Lx * 0.5, Lx)};
         }
-    }
 
-    if (anchors.size() > 2) {
-        anchors.resize(2);
-    } else if (anchors.empty()) {
-        return result;
-    }
+        std::array<double, 2> best{crossings[0], crossings[1]};
+        double best_dist = circular_distance(crossings[0], crossings[1]);
 
-    // 5. Build paths per anchor using zero-crossings of phi
-    result.resize(anchors.size());
+        for (std::size_t i = 0; i < crossings.size(); ++i) {
+            for (std::size_t j = i + 1; j < crossings.size(); ++j) {
+                double d = circular_distance(crossings[i], crossings[j]);
+                if (d > best_dist) {
+                    best_dist = d;
+                    best = {crossings[i], crossings[j]};
+                }
+            }
+        }
+        return best;
+    };
 
-    for (int k = 0; k < static_cast<int>(anchors.size()); ++k) {
-        double ref_loc = anchors[k];
+    auto fallback_from_gradient = [&](const double* row) -> std::array<double, 2> {
+        std::vector<std::pair<double, double>> grads; // (gradient magnitude, x-position)
+        grads.reserve(static_cast<std::size_t>(n_grid_x));
+        for (int x = 0; x < n_grid_x; ++x) {
+            double v1 = row[x];
+            double v2 = row[(x + 1) % n_grid_x];
+            double g = std::abs(v2 - v1);
+            double pos = (x + 0.5) * dx;
+            grads.emplace_back(g, pos);
+        }
+        std::sort(grads.begin(), grads.end(), [](const auto& a, const auto& b) {
+            return a.first > b.first;
+        });
 
-        std::vector<double> x_means(n_grid_y, 0.0);
-        std::vector<int> counts(n_grid_y, 0);
+        if (grads.empty()) {
+            return {0.0, Lx * 0.5};
+        }
+        if (grads.size() == 1) {
+            return {grads[0].second, std::fmod(grads[0].second + Lx * 0.5, Lx)};
+        }
+        return {grads[0].second, grads[1].second};
+    };
 
-        for (int y = 0; y < n_grid_y; ++y) {
+    // Two interface paths, one for each liquid/gas boundary.
+    result.assign(2, std::vector<double>(n_grid_y, 0.0));
+
+    for (int y = 0; y < n_grid_y; ++y) {
+        const double* row = &temp_grid[y * n_grid_x];
+
+        // Lightweight 1D k-means (two clusters) to estimate rho_l and rho_g.
+        double min_rho = row[0];
+        double max_rho = row[0];
+        for (int x = 1; x < n_grid_x; ++x) {
+            double v = row[x];
+            if (v < min_rho) min_rho = v;
+            if (v > max_rho) max_rho = v;
+        }
+
+        double c0 = min_rho;
+        double c1 = max_rho;
+        for (int iter = 0; iter < 5; ++iter) {
+            double sum0 = 0.0, sum1 = 0.0;
+            int cnt0 = 0, cnt1 = 0;
             for (int x = 0; x < n_grid_x; ++x) {
-                int idx = y * n_grid_x + x;
-                int idx_next = y * n_grid_x + (x + 1) % n_grid_x;
-                double v1 = phi[idx];
-                double v2 = phi[idx_next];
+                double v = row[x];
+                if (std::abs(v - c0) <= std::abs(v - c1)) {
+                    sum0 += v;
+                    ++cnt0;
+                } else {
+                    sum1 += v;
+                    ++cnt1;
+                }
+            }
+            if (cnt0 > 0) c0 = sum0 / cnt0;
+            if (cnt1 > 0) c1 = sum1 / cnt1;
+        }
 
-                if (v1 * v2 <= 0.0 && v1 != v2) {
-                    double frac = std::abs(v1) / (std::abs(v1) + std::abs(v2));
+        double rho_l = std::max(c0, c1);
+        double rho_g = std::min(c0, c1);
+        double threshold = 0.5 * (std::max(rho_l, 0.0) + std::max(rho_g, 0.0));
+
+        std::vector<double> crossings;
+        crossings.reserve(static_cast<std::size_t>(n_grid_x));
+        for (int x = 0; x < n_grid_x; ++x) {
+            double v1 = row[x];
+            double v2 = row[(x + 1) % n_grid_x];
+            double d1 = v1 - threshold;
+            double d2 = v2 - threshold;
+
+            if (d1 == 0.0) {
+                crossings.push_back(x * dx);
+                continue;
+            }
+            if (d1 * d2 < 0.0 || d2 == 0.0) {
+                double frac = (threshold - v1) / (v2 - v1);
+                if (std::isfinite(frac) && frac >= 0.0 && frac <= 1.0) {
                     double cx = (x + frac) * dx;
-
-                    double dist = cx - ref_loc;
-                    while (dist > Lx / 2.0)  dist -= Lx;
-                    while (dist < -Lx / 2.0) dist += Lx;
-
-                    if (std::abs(dist) < Lx / 4.0) {
-                        x_means[y] += dist;
-                        counts[y]  += 1;
-                    }
+                    while (cx < 0.0)  cx += Lx;
+                    while (cx >= Lx) cx -= Lx;
+                    crossings.push_back(cx);
                 }
             }
         }
 
-        std::vector<double> final_path_x(n_grid_y, 0.0);
-        std::vector<bool> valid(n_grid_y, false);
-
-        for (int y = 0; y < n_grid_y; ++y) {
-            if (counts[y] > 0) {
-                double avg_dx = x_means[y] / counts[y];
-                double abs_x  = ref_loc + avg_dx;
-                while (abs_x < 0.0)  abs_x += Lx;
-                while (abs_x >= Lx)  abs_x -= Lx;
-                final_path_x[y] = abs_x;
-                valid[y] = true;
-            }
-        }
-
-        int start_idx = -1;
-        for (int i = 0; i < n_grid_y; ++i) {
-            if (valid[i]) { start_idx = i; break; }
-        }
-
-        if (start_idx == -1) {
-            std::fill(final_path_x.begin(), final_path_x.end(), ref_loc);
+        std::array<double, 2> interfaces;
+        if (crossings.size() >= 2) {
+            interfaces = choose_two_crossings(crossings);
+        } else if (crossings.size() == 1) {
+            interfaces = {crossings[0], std::fmod(crossings[0] + Lx * 0.5, Lx)};
         } else {
-            double last_val = final_path_x[start_idx];
-            for (int i = 0; i < n_grid_y; ++i) {
-                int idx = (start_idx + i) % n_grid_y;
-                if (valid[idx]) last_val = final_path_x[idx];
-                else            final_path_x[idx] = last_val;
-            }
-            for (int i = 0; i < n_grid_y; ++i) {
-                int idx = (start_idx + i) % n_grid_y;
-                if (valid[idx]) last_val = final_path_x[idx];
-                else            final_path_x[idx] = last_val;
-            }
+            interfaces = fallback_from_gradient(row);
         }
 
-        result[k] = std::move(final_path_x);
+        if (y == 0) {
+            result[0][y] = interfaces[0];
+            result[1][y] = interfaces[1];
+        } else {
+            // Maintain continuity by matching to previous row with minimal circular distance.
+            double prev0 = result[0][y - 1];
+            double prev1 = result[1][y - 1];
+
+            double cost_direct = circular_distance(prev0, interfaces[0]) + circular_distance(prev1, interfaces[1]);
+            double cost_swap   = circular_distance(prev0, interfaces[1]) + circular_distance(prev1, interfaces[0]);
+
+            if (cost_swap < cost_direct) {
+                std::swap(interfaces[0], interfaces[1]);
+            }
+
+            result[0][y] = interfaces[0];
+            result[1][y] = interfaces[1];
+        }
     }
 
     return result;
@@ -3128,8 +3165,6 @@ std::vector<double> MDSimulation::get_pressure_profile(int n_bins_local)
 
 std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
 {
-    static bool debug_logged = false;
-
     std::vector<int> count_A(n_bins_per_rank, 0);
     std::vector<int> count_B(n_bins_per_rank, 0);
 
@@ -3167,13 +3202,6 @@ std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
     int world_rank = 0;
     MPI_Comm_size(comm, &world_size);
     MPI_Comm_rank(comm, &world_rank);
-
-    if (!debug_logged && (world_rank == 0 || world_rank == 1)) {
-        fmt::print(stderr,
-                   "[DBG get_N_profile] rank {} start: n_bins_per_rank={}, n_local={}\n",
-                   world_rank, n_bins_per_rank, n_local);
-        std::fflush(stderr);
-    }
 
     const int local_bins = n_bins_per_rank;
     const int total_bins = local_bins * world_size;
@@ -3215,17 +3243,6 @@ std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
                   0,
                   comm);
     }
-
-    if (!debug_logged && (world_rank == 0 || world_rank == 1)) {
-        fmt::print(stderr,
-                   "[DBG get_N_profile] rank {} done: total_bins={}, first two counts (rank0)={}/{}\n",
-                   world_rank,
-                   total_bins,
-                   result.empty() ? -1 : result[0],
-                   (result.size() > static_cast<std::size_t>(total_bins) ? result[total_bins] : -1));
-        std::fflush(stderr);
-    }
-    debug_logged = true;
 
     return result;
 }
