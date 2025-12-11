@@ -2309,6 +2309,43 @@ void MDSimulation::plot_interfaces(const std::string& filename, const std::strin
     RankZeroPrint("[DEBUG] plot_interfaces finished.\n");
 }
 
+double MDSimulation::get_interface_total_length(bool is_LG)
+{
+    // Only rank 0 has a complete, gathered view suitable for interface analysis.
+    if (cfg_manager.config.rank_idx != 0) {
+        return 0.0;
+    }
+
+    // Use the same grid resolution and smoothing strategy as plot_interfaces.
+    int n_grid_y = static_cast<int>(cfg_manager.config.box_h_global / 2.0);
+    if (n_grid_y < 10) n_grid_y = 10;
+
+    std::vector<std::vector<double>> interfaces = is_LG
+        ? get_smooth_interface_LG(n_grid_y, 2.0)
+        : get_smooth_interface(n_grid_y, 2.0);
+
+    if (interfaces.empty()) {
+        return 0.0;
+    }
+
+    double total_length = 0.0;
+    for (const auto& segs : interfaces) {
+        // segs is {x0, y0, x1, y1, x2, y2, ...}
+        for (std::size_t i = 0; i + 3 < segs.size(); i += 4) {
+            double x1 = segs[i + 0];
+            double y1 = segs[i + 1];
+            double x2 = segs[i + 2];
+            double y2 = segs[i + 3];
+
+            double dx = x2 - x1;
+            double dy = y2 - y1;
+            total_length += std::sqrt(dx * dx + dy * dy);
+        }
+    }
+
+    return total_length;
+}
+
 namespace {
 void plot_cwa_python(const std::string& csv_path, const std::string& figure_path) {
     if (csv_path.empty() || figure_path.empty()) {

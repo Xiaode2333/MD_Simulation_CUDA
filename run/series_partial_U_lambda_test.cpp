@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
     const int n_steps = 300'000;
     const int q_min = 3;
     const int q_max = 10;
-    const int n_bins_local = 32;
+    const int n_bins_local = 16;
 
     fs::path base_dir = fs::path(options.base_dir);
     fs::path cwa_plot_dir = base_dir / "cwa_plot";
@@ -212,26 +212,28 @@ int main(int argc, char** argv) {
             if (step % n_record_interval == 0) {
                 sim.sample_collect();
 
-                sim.save_env(saved_env_file.string(), step);
+                
 
                 const double U_tot = sim.cal_total_U();
                 const double K_tot = sim.cal_total_K();
                 const double partial_U_lambda = sim.cal_partial_U_lambda(options.epsilon_deform);
                 const double Lx = sim.get_Lx();
                 const double Ly = sim.get_Ly();
+                const double L_tot = sim.get_interface_total_length();
 
-                append_csv(U_K_tot_csv_path,
-                           rank_idx,
-                           tag,
-                           "U_tot, {}, K_tot, {}, partial_U_lambda, {}, epsilon_deform, {}, lambda_deform, {}, Lx, {}, Ly, {}, step, {}\n",
-                           U_tot,
-                           K_tot,
-                           partial_U_lambda,
-                           options.epsilon_deform,
-                           options.lambda_deform,
-                           Lx,
-                           Ly,
-                           step);
+                append_csv( U_K_tot_csv_path,
+                            rank_idx,
+                            tag,
+                            "U_tot, {}, K_tot, {}, partial_U_lambda, {}, epsilon_deform, {}, lambda_deform, {}, Lx, {}, Ly, {}, L_tot, {}, step, {}\n",
+                            U_tot,
+                            K_tot,
+                            partial_U_lambda,
+                            options.epsilon_deform,
+                            options.lambda_deform,
+                            Lx,
+                            Ly,
+                            L_tot,
+                            step);
 
                 const auto density_profile = sim.get_density_profile(n_bins_local);
                 fs::path density_step_csv = density_dir / fmt::format("density_step_{}.csv", step);
@@ -272,20 +274,25 @@ int main(int argc, char** argv) {
                                std::string(buf.data(), buf.size()));
 
                 }
-
-                fs::path interface_plot_path = interface_dir / fmt::format("interface_step_{}.svg", step);
-                fs::path interface_csv_path = interface_csv_dir / fmt::format("interface_step_{}.csv", step);
-                sim.plot_interfaces(interface_plot_path.string(), interface_csv_path.string(), density_profile);
+                
+                bool large_op = (step % (n_steps/20) == 0);
+                if (large_op) {
+                    // Large storage operations, save less often
+                    sim.save_env(saved_env_file.string(), step);
+                    fs::path interface_plot_path = interface_dir / fmt::format("interface_step_{}.svg", step);
+                    fs::path interface_csv_path = interface_csv_dir / fmt::format("interface_step_{}.csv", step);
+                    sim.plot_interfaces(interface_plot_path.string(), interface_csv_path.string(), density_profile);
+                }
 
                 if (step > 100'000) {
                     fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
                     fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
-                    sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), true, step);
+                    sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), large_op, step);//only plot when large_op is true
                     append_latest_line(cwa_step_csv, cwa_sample_csv, rank_idx, tag);
                 }
             }
 
-            if (step % 100 == 0) {
+            if (step % 1000 == 0) {
                 RankZeroPrint(rank_idx, "[series_partial_U_lambda_test] Step {}.\n", step);
             }
         }

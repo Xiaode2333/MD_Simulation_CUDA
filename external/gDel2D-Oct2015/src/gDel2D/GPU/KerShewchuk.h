@@ -554,14 +554,14 @@ const RealType* pc
     RealType v[8];
     int vlength;
 
-    RealType bvirt;
-    RealType avirt, bround, around;
-    RealType c;
-    RealType abig;
-    RealType ahi, alo, bhi, blo;
-    RealType err1, err2, err3;
-    RealType _i, _j;
-    RealType _0;
+    RealType bvirt __attribute__((unused));
+    RealType avirt __attribute__((unused)), bround __attribute__((unused)), around __attribute__((unused));
+    RealType c __attribute__((unused));
+    RealType abig __attribute__((unused));
+    RealType ahi __attribute__((unused)), alo __attribute__((unused)), bhi __attribute__((unused)), blo __attribute__((unused));
+    RealType err1 __attribute__((unused)), err2 __attribute__((unused)), err3 __attribute__((unused));
+    RealType _i __attribute__((unused)), _j __attribute__((unused));
+    RealType _0 __attribute__((unused));
 
     Two_Product(pa[0], pb[1], axby1, axby0);
     Two_Product(pa[0], pc[1], axcy1, axcy0);
@@ -848,14 +848,14 @@ const RealType  permanent
 
     RealType adxtail, bdxtail, cdxtail, adytail, bdytail, cdytail;
 
-    RealType bvirt;
-    RealType avirt, bround, around;
-    RealType c;
-    RealType abig;
-    RealType ahi, alo, bhi, blo;
-    RealType err1, err2, err3;
-    RealType _i, _j;
-    RealType _0;
+    RealType bvirt __attribute__((unused));
+    RealType avirt __attribute__((unused)), bround __attribute__((unused)), around __attribute__((unused));
+    RealType c __attribute__((unused));
+    RealType abig __attribute__((unused));
+    RealType ahi __attribute__((unused)), alo __attribute__((unused)), bhi __attribute__((unused)), blo __attribute__((unused));
+    RealType err1 __attribute__((unused)), err2 __attribute__((unused)), err3 __attribute__((unused));
+    RealType _i __attribute__((unused)), _j __attribute__((unused));
+    RealType _0 __attribute__((unused));
 
     adx = (RealType) (pa[0] - pd[0]);
     bdx = (RealType) (pb[0] - pd[0]);

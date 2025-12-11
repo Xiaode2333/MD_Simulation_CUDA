@@ -85,6 +85,10 @@ class MDSimulation {
         void do_CWA_instant(int q_min, int q_max, const std::string& csv_path, const std::string& plot_path, bool is_plot, int step, bool is_LG = false);
 
         void plot_interfaces(const std::string& filename, const std::string& csv_path, const std::vector<double>& rho, bool is_LG = false);
+        // Rank 0 only: compute total interface length L_tot = L1 + L2
+        // using the same grid-based interface locator as plot_interfaces.
+        // Returns 0.0 on non-root ranks or if no interface is detected.
+        double get_interface_total_length(bool is_LG = false);
 
         // On rank 0, returns 3 * n_bins_local entries:
         //   result[k]                  = P_xx(y_k)
