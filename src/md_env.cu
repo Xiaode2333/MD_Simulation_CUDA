@@ -310,10 +310,16 @@ void MDSimulation::broadcast_params() {
             cfg_manager.config.n_cap = static_cast<int>(mean_per_rank * 2) + 128;
         }
 
-        // Auto-calculate halo cap
+        // Auto-calculate halo cap (per-rank halo buffer size).
+        // Use a generous safety factor to handle strong deformations and density inhomogeneities.
         const double sigma_max = std::max({cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_AB, cfg_manager.config.SIGMA_BB});
-        int halo_cap = static_cast<int>(sigma_max * cfg_manager.config.cutoff * 5.0 / cfg_manager.config.box_w_global * cfg_manager.config.n_particles_global);
-        if (halo_cap < 128) halo_cap = 128;
+        int halo_cap = static_cast<int>(
+            sigma_max * cfg_manager.config.cutoff * 5.0
+            / cfg_manager.config.box_w_global * cfg_manager.config.n_particles_global
+        );
+        // Increase margin to avoid frequent capacity violations.
+        halo_cap *= 4;
+        if (halo_cap < 256) halo_cap = 256;
 
         if (cfg_manager.config.halo_left_cap <= 0) cfg_manager.config.halo_left_cap = halo_cap;
         if (cfg_manager.config.halo_right_cap <= 0) cfg_manager.config.halo_right_cap = halo_cap;
