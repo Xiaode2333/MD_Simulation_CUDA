@@ -3067,6 +3067,8 @@ std::vector<double> MDSimulation::get_pressure_profile(int n_bins_local)
 
 std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
 {
+    static bool debug_logged = false;
+
     std::vector<int> count_A(n_bins_per_rank, 0);
     std::vector<int> count_B(n_bins_per_rank, 0);
 
@@ -3104,6 +3106,13 @@ std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
     int world_rank = 0;
     MPI_Comm_size(comm, &world_size);
     MPI_Comm_rank(comm, &world_rank);
+
+    if (!debug_logged && (world_rank == 0 || world_rank == 1)) {
+        fmt::print(stderr,
+                   "[DBG get_N_profile] rank {} start: n_bins_per_rank={}, n_local={}\n",
+                   world_rank, n_bins_per_rank, n_local);
+        std::fflush(stderr);
+    }
 
     const int local_bins = n_bins_per_rank;
     const int total_bins = local_bins * world_size;
@@ -3145,6 +3154,17 @@ std::vector<int> MDSimulation::get_N_profile(int n_bins_per_rank)
                   0,
                   comm);
     }
+
+    if (!debug_logged && (world_rank == 0 || world_rank == 1)) {
+        fmt::print(stderr,
+                   "[DBG get_N_profile] rank {} done: total_bins={}, first two counts (rank0)={}/{}\n",
+                   world_rank,
+                   total_bins,
+                   result.empty() ? -1 : result[0],
+                   (result.size() > static_cast<std::size_t>(total_bins) ? result[total_bins] : -1));
+        std::fflush(stderr);
+    }
+    debug_logged = true;
 
     return result;
 }

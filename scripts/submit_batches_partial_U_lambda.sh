@@ -76,7 +76,7 @@ fi
 
 
 # Temperatures from 0.5 to 1.0 (inclusive) in steps of 0.1
-for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
+for T in 0.7 0.8 0.9 1.0; do
     T_DIR="${BASE_ROOT}/T_${T}"
     mkdir -p "$T_DIR"
 
