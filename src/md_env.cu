@@ -303,11 +303,55 @@ void MDSimulation::broadcast_params() {
             fmt::print(stderr, "[broadcast_params] Error: box_w_global <= 0.\n");
             MPI_Abort(comm, 1);
         }
-        
+
+        const double Lx_global = cfg_manager.config.box_w_global;
+        const double Ly_global = cfg_manager.config.box_h_global;
+        const int    N_global  = cfg_manager.config.n_particles_global;
+
+        // Estimate maximum initial number density based on the LG initialization:
+        // all particles of each type are placed in a central band of width
+        // devide_p * Lx * Ly (per type). We take the denser of type 0 or type 1.
+        double max_density = 0.0;
+        if (N_global > 0 &&
+            Lx_global > 0.0 &&
+            Ly_global > 0.0 &&
+            cfg_manager.config.devide_p > 0.0 &&
+            cfg_manager.config.devide_p < 1.0) {
+            const int n_type0 = cfg_manager.config.n_particles_type0;
+            const int n_type1 = N_global - n_type0;
+            const int N_max_type = std::max(n_type0, n_type1);
+            if (N_max_type > 0) {
+                const double total_area      = Lx_global * Ly_global;
+                const double dense_band_area = cfg_manager.config.devide_p * total_area;
+                if (dense_band_area > 0.0) {
+                    max_density = static_cast<double>(N_max_type) / dense_band_area;
+                }
+            }
+        }
+
         // Auto-calculate n_cap if missing
         if (cfg_manager.config.n_cap <= 0) {
-            const double mean_per_rank = static_cast<double>(cfg_manager.config.n_particles_global) / world_size;
-            cfg_manager.config.n_cap = static_cast<int>(mean_per_rank * 2) + 128;
+            const double mean_per_rank = static_cast<double>(N_global) / world_size;
+            const int n_cap_mean = static_cast<int>(mean_per_rank * 2) + 128;
+
+            int n_cap_density = 0;
+            if (max_density > 0.0) {
+                // n_cap ≈ max_density * 2 * total_area / world_size
+                const double total_area   = Lx_global * Ly_global;
+                double n_cap_estimate = max_density * 2.0 * total_area
+                                        / static_cast<double>(world_size);
+                if (n_cap_estimate < 1.0) {
+                    n_cap_estimate = 1.0;
+                }
+                n_cap_density = static_cast<int>(std::ceil(n_cap_estimate));
+            }
+
+            int n_cap_final = n_cap_mean;
+            if (n_cap_density > n_cap_final) {
+                n_cap_final = n_cap_density;
+            }
+
+            cfg_manager.config.n_cap = n_cap_final;
         }
 
         // Auto-calculate halo cap (per-rank halo buffer size).
@@ -315,11 +359,27 @@ void MDSimulation::broadcast_params() {
         const double sigma_max = std::max({cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_AB, cfg_manager.config.SIGMA_BB});
         int halo_cap = static_cast<int>(
             sigma_max * cfg_manager.config.cutoff * 5.0
-            / cfg_manager.config.box_w_global * cfg_manager.config.n_particles_global
+            / Lx_global * N_global
         );
         // Increase margin to avoid frequent capacity violations.
         halo_cap *= 4;
         if (halo_cap < 256) halo_cap = 256;
+        // Density-based halo estimate: halo_cap ≈ max_density * 2 * sigma_max * cutoff * 5.0 * Ly.
+        if (max_density > 0.0 && Ly_global > 0.0) {
+            double halo_estimate = max_density * 2.0 * sigma_max
+                                   * cfg_manager.config.cutoff * 5.0 * Ly_global;
+            if (halo_estimate < 1.0) {
+                halo_estimate = 1.0;
+            }
+            const int halo_cap_density = static_cast<int>(std::ceil(halo_estimate));
+            if (halo_cap_density > halo_cap) {
+                halo_cap = halo_cap_density;
+            }
+        }
+        // Ensure halo buffers are never smaller than the per-rank particle capacity.
+        if (halo_cap < cfg_manager.config.n_cap) {
+            halo_cap = cfg_manager.config.n_cap;
+        }
 
         if (cfg_manager.config.halo_left_cap <= 0) cfg_manager.config.halo_left_cap = halo_cap;
         if (cfg_manager.config.halo_right_cap <= 0) cfg_manager.config.halo_right_cap = halo_cap;
@@ -1758,47 +1818,48 @@ double MDSimulation::cal_partial_U_lambda(double epsilon_lambda) {
     const int n_left  = cfg_manager.config.n_halo_left;
     const int n_right = cfg_manager.config.n_halo_right;
 
-    if (n_local <= 0) {
-        return 0.0;
-    }
-
-    const int blocks = (n_local + threads - 1) / threads;
-
-    thrust::device_vector<double> d_partial(blocks);
-
-    cal_partial_U_lambda_kernel<<<blocks,
-                                  threads,
-                                  threads * static_cast<int>(sizeof(double))>>>(
-        thrust::raw_pointer_cast(d_particles.data()),
-        thrust::raw_pointer_cast(d_particles_halo_left.data()),
-        thrust::raw_pointer_cast(d_particles_halo_right.data()),
-        n_local,
-        n_left,
-        n_right,
-        cfg_manager.config.box_w_global,
-        cfg_manager.config.box_h_global,
-        cfg_manager.config.SIGMA_AA,
-        cfg_manager.config.SIGMA_BB,
-        cfg_manager.config.SIGMA_AB,
-        cfg_manager.config.EPSILON_AA,
-        cfg_manager.config.EPSILON_BB,
-        cfg_manager.config.EPSILON_AB,
-        cfg_manager.config.cutoff,
-        epsilon_lambda,
-        thrust::raw_pointer_cast(d_partial.data())
-    );
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    std::vector<double> h_partial(static_cast<size_t>(blocks));
-    CUDA_CHECK(cudaMemcpy(h_partial.data(),
-                          thrust::raw_pointer_cast(d_partial.data()),
-                          static_cast<size_t>(blocks) * sizeof(double),
-                          cudaMemcpyDeviceToHost));
-
     double local_sum = 0.0;
-    for (int i = 0; i < blocks; ++i) {
-        local_sum += h_partial[i];
+
+    if (n_local > 0) {
+        const int blocks = (n_local + threads - 1) / threads;
+
+        thrust::device_vector<double> d_partial(blocks);
+
+        cal_partial_U_lambda_kernel<<<blocks,
+                                      threads,
+                                      threads * static_cast<int>(sizeof(double))>>>(
+            thrust::raw_pointer_cast(d_particles.data()),
+            thrust::raw_pointer_cast(d_particles_halo_left.data()),
+            thrust::raw_pointer_cast(d_particles_halo_right.data()),
+            n_local,
+            n_left,
+            n_right,
+            cfg_manager.config.box_w_global,
+            cfg_manager.config.box_h_global,
+            cfg_manager.config.SIGMA_AA,
+            cfg_manager.config.SIGMA_BB,
+            cfg_manager.config.SIGMA_AB,
+            cfg_manager.config.EPSILON_AA,
+            cfg_manager.config.EPSILON_BB,
+            cfg_manager.config.EPSILON_AB,
+            cfg_manager.config.cutoff,
+            epsilon_lambda,
+            thrust::raw_pointer_cast(d_partial.data())
+        );
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        std::vector<double> h_partial(static_cast<size_t>(blocks));
+        CUDA_CHECK(cudaMemcpy(h_partial.data(),
+                              thrust::raw_pointer_cast(d_partial.data()),
+                              static_cast<size_t>(blocks) * sizeof(double),
+                              cudaMemcpyDeviceToHost));
+
+        for (int i = 0; i < blocks; ++i) {
+            local_sum += h_partial[i];
+        }
+    } else {
+        local_sum = 0.0;
     }
 
     double global_sum = 0.0;
@@ -2372,7 +2433,7 @@ void plot_cwa_python(const std::string& csv_path, const std::string& figure_path
         throw std::invalid_argument("plot_cwa_python requires valid paths");
     }
     const std::string command =
-        "python ./python/plot_cwa_python.py --csv_path \"" + csv_path +
+        "~/.conda/envs/py3/bin/python ./python/plot_cwa_python.py --csv_path \"" + csv_path +
         "\" --output \"" + figure_path + "\"";
     const int status = std::system(command.c_str());
     if (status != 0) {

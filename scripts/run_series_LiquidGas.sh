@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=pi_co54
+#SBATCH --partition=gpu
 #SBATCH --time=1-00:00:00
 #SBATCH --ntasks=4
 #SBATCH --cpus-per-task=1

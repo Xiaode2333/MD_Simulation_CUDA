@@ -233,12 +233,55 @@ int main(int argc, char** argv) {
                     std::fflush(stdout);
                 }
 
+                if (dbg) {
+                    fmt::print("[DBG LG] rank {} step {}: before cal_total_U\n",
+                               rank_idx, step);
+                    std::fflush(stdout);
+                }
                 const double U_tot = sim.cal_total_U();
+                if (dbg) {
+                    fmt::print("[DBG LG] rank {} step {}: after cal_total_U (U={})\n",
+                               rank_idx, step, U_tot);
+                    std::fflush(stdout);
+                }
+
+                if (dbg) {
+                    fmt::print("[DBG LG] rank {} step {}: before cal_total_K\n",
+                               rank_idx, step);
+                    std::fflush(stdout);
+                }
                 const double K_tot = sim.cal_total_K();
+                if (dbg) {
+                    fmt::print("[DBG LG] rank {} step {}: after cal_total_K (K={})\n",
+                               rank_idx, step, K_tot);
+                    std::fflush(stdout);
+                }
+
+                if (dbg) {
+                    fmt::print("[DBG LG] rank {} step {}: before cal_partial_U_lambda\n",
+                               rank_idx, step);
+                    std::fflush(stdout);
+                }
                 const double partial_U_lambda = sim.cal_partial_U_lambda(options.epsilon_deform);
+                if (dbg) {
+                    fmt::print("[DBG LG] rank {} step {}: after cal_partial_U_lambda\n",
+                               rank_idx, step);
+                    std::fflush(stdout);
+                }
+
+                if (dbg) {
+                    fmt::print("[DBG LG] rank {} step {}: before get_interface_total_length\n",
+                               rank_idx, step);
+                    std::fflush(stdout);
+                }
                 const double Lx = sim.get_Lx();
                 const double Ly = sim.get_Ly();
                 const double L_tot = sim.get_interface_total_length(true);
+                if (dbg) {
+                    fmt::print("[DBG LG] rank {} step {}: after get_interface_total_length (L_tot={})\n",
+                               rank_idx, step, L_tot);
+                    std::fflush(stdout);
+                }
                 if (dbg) {
                     fmt::print("[DBG LG] rank {} step {}: energies computed (U={}, K={}, L_tot={})\n",
                                rank_idx, step, U_tot, K_tot, L_tot);

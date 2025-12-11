@@ -242,7 +242,7 @@ void plot_particles_python(const std::vector<Particle>& particles,
     print_particles_csv(particles, csv_path, box_w, box_h, sigma_aa, sigma_bb);
 
     const std::string command =
-        "python ./python/plot_particle_python.py --filename \"" + filename +
+        "~/.conda/envs/py3/bin/python ./python/plot_particle_python.py --filename \"" + filename +
         "\" --csv_path \"" + csv_path + "\"";
 
     const int status = std::system(command.c_str());
@@ -278,7 +278,7 @@ void plot_triangulation_python(const std::vector<Particle>& particles,
         sigma_bb);
 
     const std::string command =
-        "python ./python/plot_triangulation_python.py --csv_name \"" + csv_path +
+        "~/.conda/envs/py3/bin/python ./python/plot_triangulation_python.py --csv_name \"" + csv_path +
         "\" --output_name \"" + filename + "\"";
 
     const int status = std::system(command.c_str());
@@ -315,7 +315,7 @@ void plot_triangulation_python_from_triangles(
         sigma_bb);
 
     const std::string command =
-        "python ./python/plot_triangulation_python.py --csv_name \"" + csv_path +
+        "~/.conda/envs/py3/bin/python ./python/plot_triangulation_python.py --csv_name \"" + csv_path +
         "\" --output_name \"" + filename + "\"";
 
     const int status = std::system(command.c_str());
@@ -423,7 +423,7 @@ void plot_interfaces_python(const std::vector<Particle>& particles,
     print_interfaces_csv(particles, interfaces, csv_path, box_w, box_h, sigma_aa, sigma_bb);
 
     const std::string command =
-        "python ./python/plot_interface_python.py --filename \"" + filename +
+        "~/.conda/envs/py3/bin/python ./python/plot_interface_python.py --filename \"" + filename +
         "\" --csv_path \"" + csv_path + "\"";
 
     const int status = std::system(command.c_str());
