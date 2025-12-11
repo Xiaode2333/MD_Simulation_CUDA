@@ -268,6 +268,7 @@ def _setup_plot(
     positions: np.ndarray,
     dpi: float,
     l_ref: float,
+    strict_limits: bool = False,
 ):
     if positions.size == 0:
         raise ValueError("Particle CSV contains no particles to plot")
@@ -286,10 +287,16 @@ def _setup_plot(
 
     draw_box = bool(metadata.get("draw_box", False))
 
-    x_left = min_x
-    x_right = x_left + box_w
-    y_bottom = min_y
-    y_top = y_bottom + box_h
+    if strict_limits:
+        x_left = 0.0
+        x_right = box_w
+        y_bottom = 0.0
+        y_top = box_h
+    else:
+        x_left = min_x
+        x_right = x_left + box_w
+        y_bottom = min_y
+        y_top = y_bottom + box_h
 
     fig_width_in = 10.0
     if box_w > l_ref:
@@ -369,12 +376,13 @@ def plot_particle_csv(
     *,
     dpi: float = 100.0,
     l_ref: float = 50.0,
+    strict_box_limits: bool = False,
 ) -> None:
     """Recreate the legacy matplotlibcpp scatter plot from a particle CSV."""
 
     metadata, positions, types = load_particle_csv(csv_path, return_types=True)
     fig, ax, fig_width_in, box_w, _, draw_box, bounds = _setup_plot(
-        metadata, positions, dpi, l_ref
+        metadata, positions, dpi, l_ref, strict_box_limits
     )
     _scatter_particles(ax, positions, types, metadata, fig_width_in, box_w)
     ax.set_title("Particles")
@@ -392,12 +400,13 @@ def plot_triangulation_csv(
     *,
     dpi: float = 100.0,
     l_ref: float = 50.0,
+    strict_box_limits: bool = False,
 ) -> None:
     """Render triangulation scatter + mesh from a CSV."""
 
     metadata, positions, types, triangles = load_triangulation_csv(csv_path)
     fig, ax, fig_width_in, box_w, _, draw_box, bounds = _setup_plot(
-        metadata, positions, dpi, l_ref
+        metadata, positions, dpi, l_ref, strict_box_limits
     )
     _scatter_particles(ax, positions, types, metadata, fig_width_in, box_w)
 
@@ -424,12 +433,13 @@ def plot_interface_csv(
     *,
     dpi: float = 100.0,
     l_ref: float = 50.0,
+    strict_box_limits: bool = False,
 ) -> None:
     """Render interface scatter + segments from a CSV."""
 
     metadata, positions, types, interfaces = load_interface_csv(csv_path)
     fig, ax, fig_width_in, box_w, _, draw_box, bounds = _setup_plot(
-        metadata, positions, dpi, l_ref
+        metadata, positions, dpi, l_ref, strict_box_limits
     )
     _scatter_particles(ax, positions, types, metadata, fig_width_in, box_w)
 

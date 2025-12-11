@@ -243,7 +243,7 @@ void plot_particles_python(const std::vector<Particle>& particles,
 
     const std::string command =
         "~/.conda/envs/py3/bin/python ./python/plot_particle_python.py --filename \"" + filename +
-        "\" --csv_path \"" + csv_path + "\"";
+        "\" --csv_path \"" + csv_path + "\" --strict-box-limits";
 
     const int status = std::system(command.c_str());
     if (status != 0) {
@@ -279,7 +279,7 @@ void plot_triangulation_python(const std::vector<Particle>& particles,
 
     const std::string command =
         "~/.conda/envs/py3/bin/python ./python/plot_triangulation_python.py --csv_name \"" + csv_path +
-        "\" --output_name \"" + filename + "\"";
+        "\" --output_name \"" + filename + "\" --strict-box-limits";
 
     const int status = std::system(command.c_str());
     if (status != 0) {
@@ -316,7 +316,7 @@ void plot_triangulation_python_from_triangles(
 
     const std::string command =
         "~/.conda/envs/py3/bin/python ./python/plot_triangulation_python.py --csv_name \"" + csv_path +
-        "\" --output_name \"" + filename + "\"";
+        "\" --output_name \"" + filename + "\" --strict-box-limits";
 
     const int status = std::system(command.c_str());
     if (status != 0) {
@@ -424,7 +424,7 @@ void plot_interfaces_python(const std::vector<Particle>& particles,
 
     const std::string command =
         "~/.conda/envs/py3/bin/python ./python/plot_interface_python.py --filename \"" + filename +
-        "\" --csv_path \"" + csv_path + "\"";
+        "\" --csv_path \"" + csv_path + "\" --strict-box-limits";
 
     const int status = std::system(command.c_str());
     if (status != 0) {

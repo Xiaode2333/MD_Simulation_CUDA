@@ -25,6 +25,11 @@ def parse_args() -> argparse.Namespace:
         default=50.0,
         help="Reference box length used to scale figure width",
     )
+    parser.add_argument(
+        "--strict-box-limits",
+        action="store_true",
+        help="Force x/y limits to [0, box_w] and [0, box_h] from metadata",
+    )
     return parser.parse_args()
 
 
@@ -35,6 +40,7 @@ def main() -> None:
         output_path=args.filename,
         dpi=args.dpi,
         l_ref=args.l_ref,
+        strict_box_limits=args.strict_box_limits,
     )
 
 

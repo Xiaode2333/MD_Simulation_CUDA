@@ -48,7 +48,7 @@ if [ "$#" -ge 1 ] && [[ "$1" == */run_series_LiquidGas || "$1" == run_series_Liq
     SERIES_BIN="$1"
     shift 1
 else
-    SERIES_BIN="build_slurm_tmp/build_9d29a7903a9b893aa8c0da2fbd2843fc561dce7e/run_series_LiquidGas"
+    SERIES_BIN="build_slurm_tmp/build_4129821591160b4df265c39e78e3b44ec592a7db/run_series_LiquidGas"
 fi
 
 if [ ! -f "$ORI_CONFIG" ]; then
