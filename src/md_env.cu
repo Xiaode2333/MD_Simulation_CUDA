@@ -1449,20 +1449,34 @@ void MDSimulation::plot_particles(const std::string& filename, const std::string
 
 // update forces and store into d_particles
 void MDSimulation::cal_forces(){
-    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
     const int n_local = cfg_manager.config.n_local;
     const int n_left = cfg_manager.config.n_halo_left;
     const int n_right = cfg_manager.config.n_halo_right;
+
+    // If there are no local particles on this rank, there is nothing to do.
+    if (n_local <= 0) {
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+        return;
+    }
+
     int blocks = (n_local + threads - 1)/threads;
-    li_force_kernel<<<blocks, threads>>>(thrust::raw_pointer_cast(d_particles.data()),
-                                thrust::raw_pointer_cast(d_particles_halo_left.data()),
-                                thrust::raw_pointer_cast(d_particles_halo_right.data()),
-                                n_local, n_left, n_right,
-                                cfg_manager.config.box_w_global, cfg_manager.config.box_h_global,
-                                cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_BB, cfg_manager.config.SIGMA_AB,
-                                cfg_manager.config.EPSILON_AA, cfg_manager.config.EPSILON_BB, cfg_manager.config.EPSILON_AB,
-                                cfg_manager.config.cutoff,
-                                cfg_manager.config.MASS_A, cfg_manager.config.MASS_B);
+    li_force_kernel<<<blocks, threads>>>(
+        thrust::raw_pointer_cast(d_particles.data()),
+        thrust::raw_pointer_cast(d_particles_halo_left.data()),
+        thrust::raw_pointer_cast(d_particles_halo_right.data()),
+        n_local, n_left, n_right,
+        cfg_manager.config.box_w_global, cfg_manager.config.box_h_global,
+        cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_BB, cfg_manager.config.SIGMA_AB,
+        cfg_manager.config.EPSILON_AA, cfg_manager.config.EPSILON_BB, cfg_manager.config.EPSILON_AB,
+        cfg_manager.config.cutoff,
+        cfg_manager.config.MASS_A, cfg_manager.config.MASS_B
+    );
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 }

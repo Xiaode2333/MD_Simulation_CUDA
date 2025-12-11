@@ -37,7 +37,7 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 
 # Source conda profile directly to ensure 'conda' command exists
-conda init
+# conda init
 source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate py3
 
