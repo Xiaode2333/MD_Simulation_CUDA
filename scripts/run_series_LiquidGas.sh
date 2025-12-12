@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=gpu
+#SBATCH --partition=pi_co54
 #SBATCH --time=1-00:00:00
 #SBATCH --ntasks=4
 #SBATCH --cpus-per-task=1
@@ -9,15 +9,37 @@
 
 set -euo pipefail
 
-if [ "$#" -lt 3 ]; then
-    echo "Usage: $0 <base_dir> <ori_config> <series_bin> [DT_init=0.1 Ddt=1e-4 ...]" >&2
-    exit 1
-fi
+LAMBDAS_ARRAY=(0 0.025 0.05 0.075 0.1 0.125 0.15 0.175 0.2 0.225 0.25 0.275 0.3 0.325 0.35 0.375 0.4 0.425 0.45 0.475 0.5 0.525 0.55 0.575 0.6 0.625 0.65 0.675 0.7 0.725 0.75 0.775 0.8 0.825 0.85 0.875 0.9 0.925 0.95 0.975 1.0)
 
-BASE_DIR="$1"
-ORI_CONFIG="$2"
-SERIES_BIN="$3"
-shift 3
+MODE="direct"
+BASE_DIR=""
+BASE_ROOT=""
+T_VALUE=""
+
+if [[ -n "${SLURM_ARRAY_TASK_ID-}" && "$#" -ge 4 ]]; then
+    # Array mode: <base_root> <ori_config> <series_bin> <T>
+    MODE="array"
+    BASE_ROOT="$1"
+    ORI_CONFIG="$2"
+    SERIES_BIN="$3"
+    T_VALUE="$4"
+    shift 4
+
+    idx="${SLURM_ARRAY_TASK_ID}"
+    lambda="${LAMBDAS_ARRAY[$idx]}"
+    BASE_DIR="${BASE_ROOT}/T_${T_VALUE}/lambda_${lambda}"
+else
+    # Direct mode: original interface
+    if [ "$#" -lt 3 ]; then
+        echo "Usage: $0 <base_dir> <ori_config> <series_bin> [DT_init=0.1 Ddt=1e-4 ...]" >&2
+        exit 1
+    fi
+
+    BASE_DIR="$1"
+    ORI_CONFIG="$2"
+    SERIES_BIN="$3"
+    shift 3
+fi
 
 if [ ! -f "$ORI_CONFIG" ]; then
     echo "[ERROR] Config file '$ORI_CONFIG' not found." >&2
@@ -45,7 +67,8 @@ export CUDA_HOME="/apps/software/2024a/software/CUDA/12.6.0"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 
-source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
+conda init
+# source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate py3
 
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
@@ -70,6 +93,13 @@ cat > "${BASE_DIR}/version.json" <<EOF
 EOF
 
 override_cli=()
+
+if [ "$MODE" = "array" ]; then
+    # In array mode, always set DT_target and lambda-deform from T_VALUE and SLURM_ARRAY_TASK_ID.
+    override_cli+=( "--DT_target=${T_VALUE}" )
+    override_cli+=( "--lambda-deform=${lambda}" )
+fi
+
 for override in "$@"; do
     if [ -z "$override" ]; then
         continue
@@ -83,4 +113,3 @@ done
 
 echo "Launching series_LiquidGas with base dir '${BASE_DIR}' and config '${ORI_CONFIG}'."
 srun --cpu-bind=none "$SERIES_BIN" --base-dir "$BASE_DIR" --ori-config "$ORI_CONFIG" "${override_cli[@]}"
-

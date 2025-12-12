@@ -37,8 +37,8 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 
 # Source conda profile directly to ensure 'conda' command exists
-# conda init
-source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
+conda init
+# source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate py3
 
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
@@ -76,12 +76,12 @@ fi
 
 
 # Temperatures from 0.5 to 1.0 (inclusive) in steps of 0.1
-for T in 0.7 0.8 0.9 1.0; do
+for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
     T_DIR="${BASE_ROOT}/T_${T}"
     mkdir -p "$T_DIR"
 
-    # Lambdas: 0.0, 0.1, ..., 1.0 (11 points)
-    for lambda in 0.05 0.15 0.25 0.35 0.45 0.55 0.65 0.75 0.85 0.95; do
+    # Lambdas: 0.0, 0.025, 0.05, 0.075, 0.1, ..., 1.0
+    for lambda in 0.025 0.075 0.125 0.175 0.225 0.275 0.325 0.375 0.425 0.475 0.525 0.575 0.625 0.675 0.725 0.775 0.825 0.875 0.925 0.975; do
         LAMBDA_DIR="${T_DIR}/lambda_${lambda}"
         mkdir -p "$LAMBDA_DIR"
 

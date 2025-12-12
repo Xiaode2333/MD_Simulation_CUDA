@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
         n_record_interval = 1;
     }
 
-    const int n_steps = 500'000;
+    const int n_steps = 2'000'000;
     const int q_min = 3;
     const int q_max = 10;
     const int n_bins_local = 32;
@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
                     sim.plot_interfaces(interface_plot_path.string(), interface_csv_path.string(), density_profile, true);
                 }
 
-                if (step > 100'000) {
+                if (step > 500'000) {
                     fs::path cwa_step_csv = cwa_plot_csv_dir / fmt::format("cwa_instant_{}.csv", step);
                     fs::path cwa_step_plot = cwa_plot_dir / fmt::format("cwa_instant_{}.svg", step);
                     sim.do_CWA_instant(q_min, q_max, cwa_step_csv.string(), cwa_step_plot.string(), large_op, step, true);//only plot when large_op is true

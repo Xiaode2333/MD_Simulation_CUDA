@@ -42,24 +42,28 @@ def load_rows(path: Path) -> List[Dict[str, float]]:
 
 
 def linear_regression(x: List[float], y: List[float]) -> Tuple[float, float]:
-    """Linear regression with intercept forced to zero.
+    """Linear regression with free intercept.
 
-    Fits y ≈ slope * x, i.e., the regression line is constrained to pass
-    through (0, 0). Returns (slope, intercept) where intercept is always 0.
+    Fits y ≈ slope * x + intercept using ordinary least squares and returns
+    (slope, intercept).
     """
     valid = [
         (xi, yi)
         for xi, yi in zip(x, y)
         if math.isfinite(xi) and math.isfinite(yi)
     ]
-    if len(valid) < 1:
+    if len(valid) < 2:
         return float("nan"), float("nan")
-    num = sum(xi * yi for xi, yi in valid)
-    den = sum(xi * xi for xi, _ in valid)
-    if den <= 1e-16:
+    n = float(len(valid))
+    sum_x = sum(xi for xi, _ in valid)
+    sum_y = sum(yi for _, yi in valid)
+    sum_xx = sum(xi * xi for xi, _ in valid)
+    sum_xy = sum(xi * yi for xi, yi in valid)
+    den = n * sum_xx - sum_x * sum_x
+    if abs(den) <= 1e-16:
         return float("nan"), float("nan")
-    slope = num / den
-    intercept = 0.0
+    slope = (n * sum_xy - sum_x * sum_y) / den
+    intercept = (sum_y - slope * sum_x) / n
     return slope, intercept
 
 

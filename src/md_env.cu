@@ -2929,7 +2929,45 @@ std::vector<std::vector<double>> MDSimulation::compute_interface_paths_LG(int n_
 
         std::array<double, 2> interfaces;
         if (crossings.size() >= 2) {
-            interfaces = choose_two_crossings(crossings);
+            // Identify the main liquid slab and take its two bounding interfaces.
+            // We assume dense phase is in the middle of the box and gas on both edges.
+            std::vector<double> boundaries;
+            boundaries.reserve(crossings.size() + 2);
+            boundaries.push_back(0.0);
+            boundaries.insert(boundaries.end(), crossings.begin(), crossings.end());
+            boundaries.push_back(Lx);
+
+            double best_start = 0.0;
+            double best_end = 0.0;
+            double best_width = -1.0;
+
+            for (std::size_t i = 0; i + 1 < boundaries.size(); ++i) {
+                double start = boundaries[i];
+                double end = boundaries[i + 1];
+                double mid = 0.5 * (start + end);
+                int ix = static_cast<int>(mid / dx);
+                if (ix < 0) {
+                    ix += n_grid_x;
+                } else if (ix >= n_grid_x) {
+                    ix -= n_grid_x;
+                }
+                double rho_mid = row[ix];
+                bool is_liquid = (rho_mid > threshold);
+                if (is_liquid) {
+                    double width = end - start;
+                    if (width > best_width) {
+                        best_width = width;
+                        best_start = start;
+                        best_end = end;
+                    }
+                }
+            }
+
+            if (best_width > 0.0) {
+                interfaces = {best_start, best_end};
+            } else {
+                interfaces = choose_two_crossings(crossings);
+            }
         } else if (crossings.size() == 1) {
             interfaces = {crossings[0], std::fmod(crossings[0] + Lx * 0.5, Lx)};
         } else {

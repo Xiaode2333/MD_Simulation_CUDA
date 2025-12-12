@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_ROOT="results/20251210_LG_series"
+BASE_ROOT="results/20251212_LG_series"
 ORI_CONFIG="${BASE_ROOT}/config.json"
 
 if [ ! -f "$ORI_CONFIG" ]; then
@@ -26,7 +26,8 @@ export CUDA_HOME="/apps/software/2024a/software/CUDA/12.6.0"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 
-source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
+conda init
+# source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate py3
 
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
@@ -63,24 +64,19 @@ else
     echo "[INFO] Reusing existing build in '${BUILD_ROOT}' for commit ${GIT_HASH}."
 fi
 
-# # Temperatures from 0.5 to 1.0 (inclusive) in steps of 0.1
-# # for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
-# for T in 0.5; do
-#     T_DIR="${BASE_ROOT}/T_${T}"
-#     mkdir -p "$T_DIR"
+# Temperatures from 0.5 to 1.0 (inclusive) in steps of 0.1
+LAMBDAS=(0 0.025 0.05 0.075 0.1 0.125 0.15 0.175 0.2 0.225 0.25 0.275 0.3 0.325 0.35 0.375 0.4 0.425 0.45 0.475 0.5 0.525 0.55 0.575 0.6 0.625 0.65 0.675 0.7 0.725 0.75 0.775 0.8 0.825 0.85 0.875 0.9 0.925 0.95 0.975 1.0)
 
-#     # for lambda in 0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0; do
-#     for lambda in 0; do
-#         LAMBDA_DIR="${T_DIR}/lambda_${lambda}"
-#         mkdir -p "$LAMBDA_DIR"
+for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
+    T_DIR="${BASE_ROOT}/T_${T}"
+    mkdir -p "$T_DIR"
 
-#         echo "Submitting T=${T}, lambda=${lambda} into ${LAMBDA_DIR}"
-#         sbatch --job-name="LG_T${T}_lambda${lambda}" \
-#             scripts/run_series_LiquidGas.sh \
-#             "$LAMBDA_DIR" \
-#             "$ORI_CONFIG" \
-#             "$SERIES_BIN" \
-#             "DT_target=${T}" \
-#             "lambda-deform=${lambda}"
-#     done
-# done
+    N_LAMBDAS=${#LAMBDAS[@]}
+    echo "Submitting array for T=${T} with ${N_LAMBDAS} lambdas"
+
+    sbatch --array=0-$((N_LAMBDAS-1)) scripts/run_series_LiquidGas.sh \
+        "$BASE_ROOT" \
+        "$ORI_CONFIG" \
+        "$SERIES_BIN" \
+        "$T"
+done
