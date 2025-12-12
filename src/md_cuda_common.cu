@@ -25,12 +25,20 @@ __global__ void middle_wrap_LG_kernel(Particle* particles,
     double x = pbc_wrap_hd(particles[idx].pos.x, Lx);
     double y = pbc_wrap_hd(particles[idx].pos.y, Ly);
 
-    // Central slab parameters (fraction p of box width, centered at Lx/2).
-    const double center = 0.5 * Lx;
+    // Central slab parameters: width p * Lx, centered at Lx / 2.
+    const double center     = 0.5 * Lx;
+    const double slab_width = p * Lx;
+    const double half_width = 0.5 * slab_width;
 
-    // Compress / wrap positions into the central slab while keeping the center fixed.
-    double x_rel = x - center;
-    double x_new = center + (x_rel * p);
+    // Fold positions into the central slab without shrinking points already inside.
+    // Work in coordinates relative to the center and apply a modulo of width p * Lx.
+    double delta = x - center;
+    double folded = fmod(delta + half_width, slab_width);
+    if (folded < 0.0) {
+        folded += slab_width;
+    }
+    folded -= half_width;
+    double x_new = center + folded;
 
     // Ensure final coordinates are inside the main box.
     x_new = pbc_wrap_hd(x_new, Lx);
