@@ -4,8 +4,9 @@
 
 #pragma once
 
-// Suppress NVCC "variable declared but never referenced" warnings from this header only.
-#ifdef __CUDACC__
+// Suppress NVIDIA compiler "variable declared but never referenced" warnings
+// from this header only (warning #177).
+#if defined(__CUDACC__) || defined(__NVCOMPILER) || defined(__PGI)
 #pragma diag_suppress 177
 #endif
 
