@@ -1509,6 +1509,61 @@ void MDSimulation::plot_particles(const std::string& filename, const std::string
                             cfg_manager.config.SIGMA_BB);
 }
 
+void MDSimulation::middle_wrap_LG_PBC() {
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+    const double p  = cfg_manager.config.devide_p;
+
+    if (Lx <= 0.0 || Ly <= 0.0 || p <= 0.0) {
+        return;
+    }
+
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
+    const int n_local = cfg_manager.config.n_local;
+    const int n_left  = cfg_manager.config.n_halo_left;
+    const int n_right = cfg_manager.config.n_halo_right;
+
+    if (n_local > 0 && !d_particles.empty()) {
+        int blocks = (n_local + threads - 1) / threads;
+        middle_wrap_LG_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles.data()),
+            n_local,
+            Lx,
+            Ly,
+            p
+        );
+    }
+
+    if (n_left > 0 && !d_particles_halo_left.empty()) {
+        int blocks = (n_left + threads - 1) / threads;
+        middle_wrap_LG_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles_halo_left.data()),
+            n_left,
+            Lx,
+            Ly,
+            p
+        );
+    }
+
+    if (n_right > 0 && !d_particles_halo_right.empty()) {
+        int blocks = (n_right + threads - 1) / threads;
+        middle_wrap_LG_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles_halo_right.data()),
+            n_right,
+            Lx,
+            Ly,
+            p
+        );
+    }
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
 // update forces and store into d_particles
 void MDSimulation::cal_forces(){
     int threads = cfg_manager.config.THREADS_PER_BLOCK;

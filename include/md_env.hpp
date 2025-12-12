@@ -64,9 +64,14 @@ class MDSimulation {
         double deform(double epsilon, double U_old);
         double get_Lx() const { return cfg_manager.config.box_w_global; }
         double get_Ly() const { return cfg_manager.config.box_h_global; }
+        // Wrap all particles into a central slab along x for LG systems.
+        // The slab occupies a fraction devide_p of the box width and is
+        // centered at Lx / 2. Works on device particles via a CUDA kernel.
+        void middle_wrap_LG_PBC();
         
         void step_single_NVE();
         void step_single_nose_hoover();
+        
 
         bool check_eqlibrium(double sensitivity);
         

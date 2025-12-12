@@ -3,6 +3,44 @@
 #include <thrust/fill.h>
 #include <thrust/device_vector.h>
 
+__global__ void middle_wrap_LG_kernel(Particle* particles,
+                                      int n,
+                                      double Lx,
+                                      double Ly,
+                                      double p)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) {
+        return;
+    }
+
+    if (Lx <= 0.0 || p <= 0.0) {
+        // Fall back to standard wrapping if parameters are invalid.
+        particles[idx].pos.x = pbc_wrap_hd(particles[idx].pos.x, Lx);
+        particles[idx].pos.y = pbc_wrap_hd(particles[idx].pos.y, Ly);
+        return;
+    }
+
+    // Start from canonical PBC-wrapped coordinates.
+    double x = pbc_wrap_hd(particles[idx].pos.x, Lx);
+    double y = pbc_wrap_hd(particles[idx].pos.y, Ly);
+
+    // Central slab parameters.
+    const double center     = 0.5 * Lx;
+    const double half_width = 0.5 * p * Lx;
+
+    // Compress / wrap positions into the central slab while keeping the center fixed.
+    // x_new lies in [center - half_width, center + half_width].
+    double x_rel = x - center;
+    double x_new = center + (x_rel * p);
+
+    // Ensure final coordinates are inside the main box.
+    x_new = pbc_wrap_hd(x_new, Lx);
+
+    particles[idx].pos.x = x_new;
+    particles[idx].pos.y = y;
+}
+
 __global__ void mark_halo_kernel(const Particle* particles,
                                  int n_local,
                                  double x_min,
