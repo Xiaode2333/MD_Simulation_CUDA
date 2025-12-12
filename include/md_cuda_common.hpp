@@ -26,14 +26,15 @@ __host__ __device__ inline double pbc_wrap_hd(double x, double L) {
     return x;
 }
 
-// Wrap particles into a central slab along x for liquid–gas setups.
-// The slab has width slab_width (typically p * Lx + 2 * sigma_max)
-// and is centered at Lx / 2.
-__global__ void middle_wrap_LG_kernel(Particle* particles,
-                                      int n,
-                                      double Lx,
-                                      double Ly,
-                                      double slab_width);
+// Confine particles to a central slab along x for liquid–gas setups.
+// The slab has width slab_width (typically p * Lx + 2 * sigma_max),
+// is centered at Lx / 2, and uses reflective boundaries in x (no PBC).
+// In y we still apply standard PBC wrapping.
+__global__ void middle_reflect_LG_kernel(Particle* particles,
+                                         int n,
+                                         double Lx,
+                                         double Ly,
+                                         double slab_width);
 
 // device kernel to mark halo particles
 __global__ void mark_halo_kernel(const Particle* particles,

@@ -3,11 +3,11 @@
 #include <thrust/fill.h>
 #include <thrust/device_vector.h>
 
-__global__ void middle_wrap_LG_kernel(Particle* particles,
-                                      int n,
-                                      double Lx,
-                                      double Ly,
-                                      double slab_width)
+__global__ void middle_reflect_LG_kernel(Particle* particles,
+                                         int n,
+                                         double Lx,
+                                         double Ly,
+                                         double slab_width)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) {
@@ -21,26 +21,28 @@ __global__ void middle_wrap_LG_kernel(Particle* particles,
         return;
     }
 
-    // Start from canonical PBC-wrapped coordinates.
-    double x = pbc_wrap_hd(particles[idx].pos.x, Lx);
+    // Start from current coordinates. Positions in x are already in [0, Lx)
+    // from the main integrator; y is wrapped with standard PBC.
+    double x = particles[idx].pos.x;
     double y = pbc_wrap_hd(particles[idx].pos.y, Ly);
 
     // Central slab parameters: given width, centered at Lx / 2.
     const double center     = 0.5 * Lx;
     const double half_width = 0.5 * slab_width;
+    const double x_min      = center - half_width;
+    const double width      = slab_width;
+    const double period     = 2.0 * width;
 
-    // Fold positions into the central slab without shrinking points already inside.
-    // Work in coordinates relative to the center and apply a modulo of width p * Lx.
-    double delta = x - center;
-    double folded = fmod(delta + half_width, slab_width);
-    if (folded < 0.0) {
-        folded += slab_width;
+    // Reflect x into [x_min, x_min + width] with mirrored boundaries.
+    double y_rel = x - x_min;
+    double y_mod = fmod(y_rel, period);
+    if (y_mod < 0.0) {
+        y_mod += period;
     }
-    folded -= half_width;
-    double x_new = center + folded;
-
-    // Ensure final coordinates are inside the main box.
-    x_new = pbc_wrap_hd(x_new, Lx);
+    if (y_mod > width) {
+        y_mod = period - y_mod;
+    }
+    double x_new = x_min + y_mod;
 
     particles[idx].pos.x = x_new;
     particles[idx].pos.y = y;

@@ -1509,7 +1509,7 @@ void MDSimulation::plot_particles(const std::string& filename, const std::string
                             cfg_manager.config.SIGMA_BB);
 }
 
-void MDSimulation::middle_wrap_LG_PBC() {
+void MDSimulation::middle_reflect_LG() {
     const double Lx = cfg_manager.config.box_w_global;
     const double Ly = cfg_manager.config.box_h_global;
     const double p  = cfg_manager.config.devide_p;
@@ -1539,7 +1539,7 @@ void MDSimulation::middle_wrap_LG_PBC() {
 
     if (n_local > 0 && !d_particles.empty()) {
         int blocks = (n_local + threads - 1) / threads;
-        middle_wrap_LG_kernel<<<blocks, threads>>>(
+        middle_reflect_LG_kernel<<<blocks, threads>>>(
             thrust::raw_pointer_cast(d_particles.data()),
             n_local,
             Lx,
@@ -1550,7 +1550,7 @@ void MDSimulation::middle_wrap_LG_PBC() {
 
     if (n_left > 0 && !d_particles_halo_left.empty()) {
         int blocks = (n_left + threads - 1) / threads;
-        middle_wrap_LG_kernel<<<blocks, threads>>>(
+        middle_reflect_LG_kernel<<<blocks, threads>>>(
             thrust::raw_pointer_cast(d_particles_halo_left.data()),
             n_left,
             Lx,
@@ -1561,7 +1561,7 @@ void MDSimulation::middle_wrap_LG_PBC() {
 
     if (n_right > 0 && !d_particles_halo_right.empty()) {
         int blocks = (n_right + threads - 1) / threads;
-        middle_wrap_LG_kernel<<<blocks, threads>>>(
+        middle_reflect_LG_kernel<<<blocks, threads>>>(
             thrust::raw_pointer_cast(d_particles_halo_right.data()),
             n_right,
             Lx,
@@ -1726,9 +1726,9 @@ void MDSimulation::step_single_nose_hoover(bool do_middle_wrap) {
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
-    // Optionally re-wrap particles into the central LG slab before migration.
+    // Optionally confine particles into the central LG slab before migration.
     if (do_middle_wrap) {
-        middle_wrap_LG_PBC();
+        middle_reflect_LG();
     }
 
     // exchange particles and rebuild halos, may change n_local
