@@ -70,7 +70,7 @@ class MDSimulation {
         void middle_wrap_LG_PBC();
         
         void step_single_NVE();
-        void step_single_nose_hoover();
+        void step_single_nose_hoover(bool do_middle_wrap = false);
         
 
         bool check_eqlibrium(double sensitivity);

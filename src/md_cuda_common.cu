@@ -7,14 +7,14 @@ __global__ void middle_wrap_LG_kernel(Particle* particles,
                                       int n,
                                       double Lx,
                                       double Ly,
-                                      double p)
+                                      double slab_width)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) {
         return;
     }
 
-    if (Lx <= 0.0 || p <= 0.0) {
+    if (Lx <= 0.0 || slab_width <= 0.0) {
         // Fall back to standard wrapping if parameters are invalid.
         particles[idx].pos.x = pbc_wrap_hd(particles[idx].pos.x, Lx);
         particles[idx].pos.y = pbc_wrap_hd(particles[idx].pos.y, Ly);
@@ -25,9 +25,8 @@ __global__ void middle_wrap_LG_kernel(Particle* particles,
     double x = pbc_wrap_hd(particles[idx].pos.x, Lx);
     double y = pbc_wrap_hd(particles[idx].pos.y, Ly);
 
-    // Central slab parameters: width p * Lx, centered at Lx / 2.
+    // Central slab parameters: given width, centered at Lx / 2.
     const double center     = 0.5 * Lx;
-    const double slab_width = p * Lx;
     const double half_width = 0.5 * slab_width;
 
     // Fold positions into the central slab without shrinking points already inside.

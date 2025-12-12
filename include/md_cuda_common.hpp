@@ -27,12 +27,13 @@ __host__ __device__ inline double pbc_wrap_hd(double x, double L) {
 }
 
 // Wrap particles into a central slab along x for liquid–gas setups.
-// The slab has width p * Lx and is centered at Lx / 2.
+// The slab has width slab_width (typically p * Lx + 2 * sigma_max)
+// and is centered at Lx / 2.
 __global__ void middle_wrap_LG_kernel(Particle* particles,
                                       int n,
                                       double Lx,
                                       double Ly,
-                                      double p);
+                                      double slab_width);
 
 // device kernel to mark halo particles
 __global__ void mark_halo_kernel(const Particle* particles,

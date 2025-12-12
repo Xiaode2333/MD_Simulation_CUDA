@@ -207,10 +207,8 @@ int main(int argc, char** argv) {
                       "[series_partial_U_lambda_test] Starting simulation loop.\n");
 
         for (int step = 0; step < n_steps; ++step) {
-            sim.step_single_nose_hoover();
-            if (step <= 100'000){// Limit particles inside the middle so we can equilibrate the liquid first before evaporating
-                sim.middle_wrap_LG_PBC();
-            }
+            const bool do_middle_wrap = (step <= 100'000);
+            sim.step_single_nose_hoover(do_middle_wrap);
 
             if (step % n_record_interval == 0) {
                 sim.sample_collect();

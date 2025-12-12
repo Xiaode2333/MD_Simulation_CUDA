@@ -1518,6 +1518,16 @@ void MDSimulation::middle_wrap_LG_PBC() {
         return;
     }
 
+    // Effective slab width: p * Lx plus a small buffer 2 * sigma_max
+    // to avoid pathological cases where particles sit exactly on the edge.
+    const double sigma_max = std::max({cfg_manager.config.SIGMA_AA,
+                                       cfg_manager.config.SIGMA_BB,
+                                       cfg_manager.config.SIGMA_AB});
+    double slab_width = p * Lx + 2.0 * sigma_max;
+    if (slab_width > Lx) {
+        slab_width = Lx;
+    }
+
     int threads = cfg_manager.config.THREADS_PER_BLOCK;
     if (threads <= 0) {
         threads = 256;
@@ -1534,7 +1544,7 @@ void MDSimulation::middle_wrap_LG_PBC() {
             n_local,
             Lx,
             Ly,
-            p
+            slab_width
         );
     }
 
@@ -1545,7 +1555,7 @@ void MDSimulation::middle_wrap_LG_PBC() {
             n_left,
             Lx,
             Ly,
-            p
+            slab_width
         );
     }
 
@@ -1556,7 +1566,7 @@ void MDSimulation::middle_wrap_LG_PBC() {
             n_right,
             Lx,
             Ly,
-            p
+            slab_width
         );
     }
 
@@ -1667,7 +1677,7 @@ void MDSimulation::step_single_NVE() {
 }
 
 
-void MDSimulation::step_single_nose_hoover() {
+void MDSimulation::step_single_nose_hoover(bool do_middle_wrap) {
     MPI_Barrier(comm);
     const double dt = cfg_manager.config.dt;
 
@@ -1714,6 +1724,11 @@ void MDSimulation::step_single_nose_hoover() {
         );
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    // Optionally re-wrap particles into the central LG slab before migration.
+    if (do_middle_wrap) {
+        middle_wrap_LG_PBC();
     }
 
     // exchange particles and rebuild halos, may change n_local
