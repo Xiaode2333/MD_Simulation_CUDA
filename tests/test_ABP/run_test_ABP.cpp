@@ -32,7 +32,7 @@ int main() {
     }
 
     // Keep runtime modest for a test: ~2 * save_dt_interval worth of steps.
-    const int n_steps = 2 * n_record_interval;
+    const int n_steps = 100000;
     const int n_density_bins =
             std::max(10, static_cast<int>(cfg_mgr.config.box_w_global / 2.0));
 
@@ -61,8 +61,8 @@ int main() {
                     cfg_path, saved_cfg_path,
                     std::filesystem::copy_options::overwrite_existing);
         } catch (const std::filesystem::filesystem_error &e) {
-            fmt::print(stderr, "[Error] Failed to copy {} to {}: {}\n", cfg_path,
-                       saved_cfg_path, e.what());
+            fmt::print(stderr, "[Error] Failed to copy {} to {}: {}\n",
+                       cfg_path.string(), saved_cfg_path, e.what());
             MPI_Abort(MPI_COMM_WORLD, 3);
         }
     }

@@ -1695,11 +1695,26 @@ void MDSimulation::step_single_nose_hoover(bool do_middle_wrap) {
 //                                 v = μ·F + v0·û + √(2·D_r·Δt)·η
 //                                 r^{n+1} = r^n + Δt·v
 void MDSimulation::step_single_ABP() {
-    const int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    MPI_Barrier(comm);
+
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
     const double dt = cfg_manager.config.dt;
-    const int n_local = cfg_manager.config.n_local;
+    int n_local = cfg_manager.config.n_local;
+    const int n_cap = cfg_manager.config.n_cap;
     const double Lx = cfg_manager.config.box_w_global;
     const double Ly = cfg_manager.config.box_h_global;
+
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                             "[step_single_ABP] rank {} n_local={} exceeds n_cap={} before "
+                             "step.\n",
+                             cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
 
     // ABP parameters from config
     const double mu = cfg_manager.config.mu;
@@ -1731,12 +1746,7 @@ void MDSimulation::step_single_ABP() {
         abp_rng_initialized = true;
     }
 
-    // Update halo regions for force computation
-    update_halo();
-
-    // Compute interaction forces (stored in acc field as F/mass, but we use as F
-    // in ABP)
-    cal_forces();
+    
 
     // Integrate ABP dynamics if we have local particles
     if (n_local > 0 && d_rng_states != nullptr) {
@@ -1751,7 +1761,37 @@ void MDSimulation::step_single_ABP() {
     }
 
     // Exchange particles between ranks after position update
+    // Update halo regions for force computation
     update_d_particles();
+    update_halo();
+    cal_forces();
+    
+
+    // recompute n_local after migration and check capacity
+    n_local = cfg_manager.config.n_local;
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                             "[step_single_ABP] rank {} n_local={} exceeds n_cap={} after "
+                             "exchange.\n",
+                             cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
+
+    // If particles appeared after migration, lazily init RNG states
+    if (!abp_rng_initialized && n_local > 0) {
+        CUDA_CHECK(cudaMalloc(&d_rng_states, n_local * sizeof(curandState)));
+
+        int blocks = (n_local + threads - 1) / threads;
+        unsigned long long seed =
+                static_cast<unsigned long long>(std::time(nullptr)) +
+                cfg_manager.config.rank_idx * 1000000ULL;
+
+        init_ABP_rng_kernel<<<blocks, threads>>>(d_rng_states, n_local, seed);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        abp_rng_initialized = true;
+    }
 
     // Update time
     t += dt;
