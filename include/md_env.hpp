@@ -77,7 +77,7 @@ public:
 
     void step_single_NVE();
     void step_single_nose_hoover(bool do_middle_wrap = false);
-    void step_single_ABP(); // ABP overdamped dynamics with self-propulsion
+    void step_single_ABP(bool do_middle_wrap = false); // ABP overdamped dynamics with self-propulsion
 
     bool check_eqlibrium(double sensitivity);
 

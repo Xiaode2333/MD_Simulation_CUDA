@@ -1694,7 +1694,7 @@ void MDSimulation::step_single_nose_hoover(bool do_middle_wrap) {
 // Implements Euler-Maruyama for: θ^{n+1} = θ^n + √(2·D_θ·Δt)·ξ
 //                                 v = μ·F + v0·û + √(2·D_r·Δt)·η
 //                                 r^{n+1} = r^n + Δt·v
-void MDSimulation::step_single_ABP() {
+void MDSimulation::step_single_ABP(bool do_middle_wrap) {
     MPI_Barrier(comm);
 
     int threads = cfg_manager.config.THREADS_PER_BLOCK;
@@ -1746,7 +1746,14 @@ void MDSimulation::step_single_ABP() {
         abp_rng_initialized = true;
     }
 
-    
+    // Optionally confine particles into the central LG slab before migration.
+    if (do_middle_wrap) {
+        middle_reflect_LG();
+    }
+
+    // Halo + forces before ABP integration
+    update_halo();
+    cal_forces();
 
     // Integrate ABP dynamics if we have local particles
     if (n_local > 0 && d_rng_states != nullptr) {
@@ -1761,11 +1768,11 @@ void MDSimulation::step_single_ABP() {
     }
 
     // Exchange particles between ranks after position update
-    // Update halo regions for force computation
     update_d_particles();
+
+    // Update halo regions for force computation
     update_halo();
     cal_forces();
-    
 
     // recompute n_local after migration and check capacity
     n_local = cfg_manager.config.n_local;
@@ -2462,7 +2469,7 @@ void MDSimulation::plot_interfaces(const std::string &filename,
 
     // Smoothing sigma: 2.0 grid cells (approx 2.0 sigma) to kill molecular noise
     std::vector<std::vector<double>> interfaces =
-            is_LG ? get_smooth_interface_LG(n_grid_y, 2.0)
+            is_LG ? get_smooth_interface_LG(n_grid_y, 4.0)
                         : get_smooth_interface(n_grid_y, 2.0);
 
     plot_interfaces_python(
@@ -2483,7 +2490,7 @@ double MDSimulation::get_interface_total_length(bool is_LG) {
         n_grid_y = 10;
 
     std::vector<std::vector<double>> interfaces =
-            is_LG ? get_smooth_interface_LG(n_grid_y, 2.0)
+            is_LG ? get_smooth_interface_LG(n_grid_y, 4.0)
                         : get_smooth_interface(n_grid_y, 2.0);
 
     if (interfaces.empty()) {
@@ -2555,7 +2562,7 @@ void MDSimulation::do_CWA_instant(int q_min, int q_max,
     const double smoothing_sigma = 2.0;
 
     std::vector<std::vector<double>> interface_paths =
-            is_LG ? compute_interface_paths_LG(n_grid_y, smoothing_sigma)
+            is_LG ? compute_interface_paths_LG(n_grid_y, 2*smoothing_sigma)
                         : compute_interface_paths(n_grid_y, smoothing_sigma);
     if (interface_paths.empty()) {
         RankZeroPrint("[CWA] No interfaces detected for analysis.\n");
