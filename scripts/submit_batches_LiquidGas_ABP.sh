@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_ROOT="results/20251218_LG_ABP_series"
+BASE_ROOT="results/20251218_LG_ABP_series2"
 ORI_CONFIG="${BASE_ROOT}/config.json"
 
 if [ ! -f "$ORI_CONFIG" ]; then
@@ -57,23 +57,23 @@ if [ ! -f "${BUILD_ROOT}/CMakeCache.txt" ] || [ ! -x "$SERIES_BIN" ]; then
         -DPython3_EXECUTABLE="$PY_EXEC" \
         -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    cmake --build "$BUILD_ROOT" -j --target run_series_LiquidGas_ABP
+    cmake --build "$BUILD_ROOT" -j 32 --target run_series_LiquidGas_ABP
 else
     echo "[INFO] Reusing existing build in '${BUILD_ROOT}' for commit ${GIT_HASH}."
 fi
 
-LAMBDAS=(0 0.025 0.05 0.075 0.1 0.125 0.15 0.175 0.2 0.225 0.25 0.275 0.3 0.325 0.35 0.375 0.4 0.425 0.45 0.475 0.5 0.525 0.55 0.575 0.6 0.625 0.65 0.675 0.7 0.725 0.75 0.775 0.8 0.825 0.85 0.875 0.9 0.925 0.95 0.975 1.0)
+LAMBDAS=(0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 
-for DR in 0.5 0.6 0.7 0.8 0.9 1.0; do
-    DR_DIR="${BASE_ROOT}/D_r_${DR}"
-    mkdir -p "$DR_DIR"
+for V0 in 1 2 5 10 20 50 100; do
+    V0_DIR="${BASE_ROOT}/v0_${V0}"
+    mkdir -p "$V0_DIR"
 
     N_LAMBDAS=${#LAMBDAS[@]}
-    echo "Submitting array for D_r=${DR} with ${N_LAMBDAS} lambdas"
+    echo "Submitting array for v0=${V0} with ${N_LAMBDAS} lambdas"
 
     sbatch --array=0-$((N_LAMBDAS-1)) scripts/run_series_LiquidGas_ABP.sh \
         "$BASE_ROOT" \
         "$ORI_CONFIG" \
         "$SERIES_BIN" \
-        "$DR"
+        "$V0"
 done

@@ -14,20 +14,20 @@ LAMBDAS_ARRAY=(0 0.025 0.05 0.075 0.1 0.125 0.15 0.175 0.2 0.225 0.25 0.275 0.3 
 MODE="direct"
 BASE_DIR=""
 BASE_ROOT=""
-D_R_VALUE=""
+V0_VALUE=""
 
 if [[ -n "${SLURM_ARRAY_TASK_ID-}" && "$#" -ge 4 ]]; then
-    # Array mode: <base_root> <ori_config> <series_bin> <D_r>
+    # Array mode: <base_root> <ori_config> <series_bin> <v0>
     MODE="array"
     BASE_ROOT="$1"
     ORI_CONFIG="$2"
     SERIES_BIN="$3"
-    D_R_VALUE="$4"
+    V0_VALUE="$4"
     shift 4
 
     idx="${SLURM_ARRAY_TASK_ID}"
     lambda="${LAMBDAS_ARRAY[$idx]}"
-    BASE_DIR="${BASE_ROOT}/D_r_${D_R_VALUE}/lambda_${lambda}"
+    BASE_DIR="${BASE_ROOT}/v0_${V0_VALUE}/lambda_${lambda}"
 else
     # Direct mode: original interface
     if [ "$#" -lt 3 ]; then
@@ -94,10 +94,10 @@ EOF
 override_cli=()
 
 if [ "$MODE" = "array" ]; then
-    # In array mode, always set D_r and T_init/T_target from D_R_VALUE and lambda from SLURM_ARRAY_TASK_ID.
-    override_cli+=( "--DD_r=${D_R_VALUE}" )
-    override_cli+=( "--DT_init=${D_R_VALUE}" )
-    override_cli+=( "--DT_target=${D_R_VALUE}" )
+    # In array mode, always set v0 and match T_init/T_target to v0; lambda from SLURM_ARRAY_TASK_ID.
+    override_cli+=( "--Dv0=${V0_VALUE}" )
+    override_cli+=( "--DT_init=${V0_VALUE}" )
+    override_cli+=( "--DT_target=${V0_VALUE}" )
     override_cli+=( "--lambda-deform=${lambda}" )
 fi
 
