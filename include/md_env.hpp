@@ -94,6 +94,11 @@ public:
                                                                            bool is_plot = false,
                                                                            const std::string &filename = "",
                                                                            const std::string &csv_path = "") const;
+    // Rank 0 only: total length of all AB pair edges.
+    double get_AB_pair_length(const ABPairNetworks &networks) const;
+    // Rank 0 only: counts triangles by composition.
+    // Returns {AAA, AAB, ABB, BBB}.
+    std::vector<int> get_tri_types_num(const TriangulationResult &tri) const;
 
     std::vector<std::vector<double>>
     locate_interface(const delaunator::Delaunator &d);

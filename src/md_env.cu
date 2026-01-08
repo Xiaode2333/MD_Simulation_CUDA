@@ -2484,6 +2484,97 @@ ABPairNetworks MDSimulation::get_AB_pair_network(const TriangulationResult &tri,
     return result;
 }
 
+double MDSimulation::get_AB_pair_length(const ABPairNetworks &networks) const {
+    if (cfg_manager.config.rank_idx != 0) {
+        return 0.0;
+    }
+
+    double total_length = 0.0;
+    const std::size_t comp_count = std::min(networks.networks_nodes.size(),
+                                            networks.networks_edges.size());
+
+    for (std::size_t cid = 0; cid < comp_count; ++cid) {
+        const auto &nodes = networks.networks_nodes[cid];
+        const auto &edges = networks.networks_edges[cid];
+        if (nodes.empty() || edges.empty()) {
+            continue;
+        }
+
+        for (const auto &e : edges) {
+            if (e.node0 < 0 || e.node1 < 0 ||
+                    e.node0 >= static_cast<int>(nodes.size()) ||
+                    e.node1 >= static_cast<int>(nodes.size())) {
+                continue;
+            }
+            const double dx = nodes[static_cast<std::size_t>(e.node0)].x -
+                                              nodes[static_cast<std::size_t>(e.node1)].x;
+            const double dy = nodes[static_cast<std::size_t>(e.node0)].y -
+                                              nodes[static_cast<std::size_t>(e.node1)].y;
+            total_length += std::sqrt(dx * dx + dy * dy);
+        }
+    }
+
+    return total_length;
+}
+
+std::vector<int>
+MDSimulation::get_tri_types_num(const TriangulationResult &tri) const {
+    // NA, Na, Nb, NB correspond to AAA, AAB, ABB, BBB.
+    std::vector<int> counts(4, 0);
+
+    if (cfg_manager.config.rank_idx != 0) {
+        return counts;
+    }
+
+    const std::size_t vert_count = tri.vertex_to_idx.size();
+    if (vert_count == 0 || tri.triangles.empty()) {
+        return counts;
+    }
+
+    auto vertex_type = [&](int v_idx) -> int {
+        if (v_idx < 0 || v_idx >= static_cast<int>(vert_count)) {
+            return -1;
+        }
+        int p_idx = tri.vertex_to_idx[static_cast<std::size_t>(v_idx)];
+        if (p_idx < 0 || p_idx >= static_cast<int>(h_particles.size())) {
+            return -1;
+        }
+        return h_particles[static_cast<std::size_t>(p_idx)].type;
+    };
+
+    auto is_valid_type = [](int t) { return t == 0 || t == 1; };
+
+    for (const auto &tri_idx : tri.triangles) {
+        int t0 = vertex_type(tri_idx[0]);
+        int t1 = vertex_type(tri_idx[1]);
+        int t2 = vertex_type(tri_idx[2]);
+
+        if (!(is_valid_type(t0) && is_valid_type(t1) && is_valid_type(t2))) {
+            continue;
+        }
+
+        const int a_count = (t0 == 0) + (t1 == 0) + (t2 == 0);
+        switch (a_count) {
+        case 3:
+            ++counts[0];
+            break;
+        case 2:
+            ++counts[1];
+            break;
+        case 1:
+            ++counts[2];
+            break;
+        case 0:
+            ++counts[3];
+            break;
+        default:
+            break;
+        }
+    }
+
+    return counts;
+}
+
 void MDSimulation::plot_interfaces(const std::string &filename,
                                                                      const std::string &csv_path,
                                                                      const std::vector<double> &rho, bool is_LG) {

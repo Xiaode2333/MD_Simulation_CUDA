@@ -5,46 +5,28 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --output=./results/series_LiquidGas_ABP_%j.out
+#SBATCH --array=0-40
+#SBATCH --output=./results/20260108_test_area_with_num_tri_types_%A_%a.out
 
 set -euo pipefail
 
-LAMBDAS_ARRAY=(0 0.025 0.05 0.075 0.1 0.125 0.15 0.175 0.2 0.225 0.25 0.275 0.3 0.325 0.35 0.375 0.4 0.425 0.45 0.475 0.5 0.525 0.55 0.575 0.6 0.625 0.65 0.675 0.7 0.725 0.75 0.775 0.8 0.825 0.85 0.875 0.9 0.925 0.95 0.975 1.0)
-
-MODE="direct"
-BASE_DIR=""
-BASE_ROOT=""
-V0_VALUE=""
-
-if [[ -n "${SLURM_ARRAY_TASK_ID-}" && "$#" -ge 4 ]]; then
-    # Array mode: <base_root> <ori_config> <series_bin> <v0>
-    MODE="array"
-    BASE_ROOT="$1"
-    ORI_CONFIG="$2"
-    SERIES_BIN="$3"
-    V0_VALUE="$4"
-    shift 4
-
-    idx="${SLURM_ARRAY_TASK_ID}"
-    lambda="${LAMBDAS_ARRAY[$idx]}"
-    BASE_DIR="${BASE_ROOT}/v0_${V0_VALUE}/lambda_${lambda}"
-else
-    # Direct mode: original interface
-    if [ "$#" -lt 3 ]; then
-        echo "Usage: $0 <base_dir> <ori_config> <series_bin> [DT_init=0.1 Ddt=1e-4 ...]" >&2
-        exit 1
-    fi
-
-    BASE_DIR="$1"
-    ORI_CONFIG="$2"
-    SERIES_BIN="$3"
-    shift 3
+if [ "$#" -lt 4 ]; then
+    echo "Usage: $0 <T_dir> <ori_config> <series_bin> <T_value> [extra_overrides...]" >&2
+    exit 1
 fi
+
+BASE_ROOT="$1"  # T-specific root
+ORI_CONFIG="$2"
+SERIES_BIN="$3"
+T_VALUE="$4"
+shift 4
 
 if [ ! -f "$ORI_CONFIG" ]; then
     echo "[ERROR] Config file '$ORI_CONFIG' not found." >&2
     exit 1
 fi
+
+# rm -rf build
 
 module reset
 module --force purge
@@ -67,7 +49,8 @@ export CUDA_HOME="/apps/software/2024a/software/CUDA/12.6.0"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 
-conda init
+# Source conda profile directly to ensure 'conda' command exists
+source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 conda activate py3
 
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
@@ -76,6 +59,24 @@ if [ ! -x "$SERIES_BIN" ]; then
     echo "[ERROR] $SERIES_BIN was not produced." >&2
     exit 2
 fi
+
+if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
+    echo "[ERROR] SLURM_ARRAY_TASK_ID is not set; this script is intended for array jobs." >&2
+    exit 3
+fi
+
+LAMBDA_INDEX="${SLURM_ARRAY_TASK_ID}"
+LAMBDA_VALUE=$(python - <<'PY'
+import os
+idx = int(os.environ["SLURM_ARRAY_TASK_ID"])
+if idx < 0 or idx > 40:
+    raise SystemExit(f"lambda index {idx} out of range [0,40]")
+lam = idx / 40.0
+print(f"{lam:.8f}")
+PY
+)
+LAMBDA_DIR_NAME=$(printf "lambda_%0.6f" "$LAMBDA_VALUE")
+BASE_DIR="${BASE_ROOT}/${LAMBDA_DIR_NAME}"
 
 mkdir -p -- "$BASE_DIR"
 
@@ -92,15 +93,8 @@ cat > "${BASE_DIR}/version.json" <<EOF
 EOF
 
 override_cli=()
-
-if [ "$MODE" = "array" ]; then
-    # In array mode, always set v0 and match T_init/T_target to v0; lambda from SLURM_ARRAY_TASK_ID.
-    override_cli+=( "--Dv0=${V0_VALUE}" )
-    override_cli+=( "--DT_init=${V0_VALUE}" )
-    override_cli+=( "--DT_target=${V0_VALUE}" )
-    override_cli+=( "--lambda-deform=${lambda}" )
-fi
-
+override_cli+=("--DT_target=${T_VALUE}")
+override_cli+=("--lambda-deform=${LAMBDA_VALUE}")
 for override in "$@"; do
     if [ -z "$override" ]; then
         continue
@@ -112,5 +106,5 @@ for override in "$@"; do
     fi
 done
 
-echo "Launching series_LiquidGas_ABP with base dir '${BASE_DIR}' and config '${ORI_CONFIG}'."
+echo "Launching series_test_area_with_num_tri_types (T=${T_VALUE}, lambda=${LAMBDA_VALUE}) with base dir '${BASE_DIR}' and config '${ORI_CONFIG}'."
 srun --cpu-bind=none "$SERIES_BIN" --base-dir "$BASE_DIR" --ori-config "$ORI_CONFIG" "${override_cli[@]}"

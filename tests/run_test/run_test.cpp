@@ -101,9 +101,14 @@ int main(){
                 RankZeroPrint(rank_idx, "[Step] {}. triangulation_plot.\n", step);
                 auto tri_result = sim.triangulation_plot(true, frame_triangulation_path, csv_path_triangulation);
                 if (tri_result) {
+                    auto tri_counts = sim.get_tri_types_num(*tri_result);
+                    sim.RankZeroPrint("Triangle types (AAA, AAB, ABB, BBB): {}\n",
+                                      tri_counts);
                     RankZeroPrint(rank_idx, "[Step] {}. plotting AB networks.\n", step);
-                    sim.get_AB_pair_network(*tri_result, true, frame_ab_network_path,
+                    auto ab_networks = sim.get_AB_pair_network(*tri_result, true, frame_ab_network_path,
                                             csv_path_ab_network);
+                    double ab_length = sim.get_AB_pair_length(ab_networks);
+                    sim.RankZeroPrint("Total AB pair length = {:.6f}\n", ab_length);
                 }
                 
                 // RankZeroPrint(rank_idx, "[Step] {}. plot_interfaces.\n", step);
