@@ -7,6 +7,7 @@
 #SBATCH --mem=64G
 #SBATCH --array=0-40
 #SBATCH --output=./results/20260108_test_area_with_num_tri_types_%A_%a.out
+#SBATCH --mail-type=FAIL
 
 set -euo pipefail
 

@@ -83,6 +83,7 @@ for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
     echo "Submitting T=${T} array over lambda (41 values, 0.0 to 1.0 by 1/40) into ${T_DIR}"
     sbatch --job-name="test_area_T${T}" \
         --array=0-40 \
+        --mail-type=FAIL \
         scripts/run_series_test_area_with_num_tri_types.sh \
         "$T_DIR" \
         "$ORI_CONFIG" \
