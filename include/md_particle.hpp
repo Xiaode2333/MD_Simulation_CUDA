@@ -17,6 +17,8 @@ namespace delaunator {
 class Delaunator;
 }
 
+struct ABPairNetworks;
+
 // #ifdef __CUDACC__
 //     #include <vector_types.h>
 // #else
@@ -87,6 +89,23 @@ void plot_triangulation_python_from_triangles(
         const std::string &filename, const std::string &csv_path,
         const double box_w, const double box_h, const double sigma_aa,
         const double sigma_bb);
+
+// Write A–B midpoint network CSV (metadata + particles + network nodes/edges).
+void print_AB_network_csv(const std::vector<Particle> &particles,
+                                                   const ABPairNetworks &networks,
+                                                   const std::string &filename,
+                                                   double box_w, double box_h,
+                                                   double sigma_aa, double sigma_bb);
+
+// Write CSV and call the Python plotting script to render A–B networks on top of
+// the particle frame.
+void plot_AB_network_python(const std::vector<Particle> &particles,
+                                                     const ABPairNetworks &networks,
+                                                     const std::string &filename,
+                                                     const std::string &csv_path,
+                                                     const double box_w, const double box_h,
+                                                     const double sigma_aa,
+                                                     const double sigma_bb);
 
 // Write an interface CSV: metadata row, particle block, then interface segments
 // (for python/particle_csv.load_interface_csv).

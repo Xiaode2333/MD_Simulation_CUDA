@@ -42,3 +42,6 @@ ToDo.md
 .cache/
 .clangd/
 .clangd
+.claude/
+.claude-code/
+skills/

@@ -1,4 +1,5 @@
 #include "md_particle.hpp"
+#include "md_env.hpp"
 
 #include <array>
 #include <delaunator-header-only.hpp>
@@ -322,6 +323,138 @@ void plot_triangulation_python_from_triangles(
         if (status != 0) {
                 throw std::runtime_error(
                         "plot_triangulation_python.py failed with status " + std::to_string(status));
+        }
+}
+
+void print_AB_network_csv(const std::vector<Particle>& particles,
+                                                   const ABPairNetworks& networks,
+                                                   const std::string& filename,
+                                                   double box_w,
+                                                   double box_h,
+                                                   double sigma_aa,
+                                                   double sigma_bb)
+{
+        const Extents ext = compute_extents(particles);
+
+        double resolved_box_w = box_w;
+        double resolved_box_h = box_h;
+        const bool draw_box_input = (box_w > 0.0 && box_h > 0.0);
+
+        if (resolved_box_w <= 0.0) {
+                resolved_box_w = particles.empty() ? 1.0 : (ext.max_x - ext.min_x);
+                if (resolved_box_w <= 0.0) {
+                        resolved_box_w = 1.0;
+                }
+        }
+
+        if (resolved_box_h <= 0.0) {
+                resolved_box_h = particles.empty() ? 1.0 : (ext.max_y - ext.min_y);
+                if (resolved_box_h <= 0.0) {
+                        resolved_box_h = 1.0;
+                }
+        }
+
+        std::ofstream out(filename, std::ios::trunc);
+        if (!out) {
+                throw std::runtime_error("Failed to open AB network CSV for writing: " + filename);
+        }
+
+        out.setf(std::ios::fixed, std::ios::floatfield);
+        out << std::setprecision(12);
+
+        const std::size_t n_networks = networks.networks_nodes.size();
+        std::size_t total_nodes = 0;
+        std::size_t total_edges = 0;
+        for (std::size_t i = 0; i < n_networks; ++i) {
+                total_nodes += networks.networks_nodes[i].size();
+                total_edges += networks.networks_edges[i].size();
+        }
+
+        out << "box_w," << resolved_box_w << ','
+                << "box_h," << resolved_box_h << ','
+                << "sigma_aa," << sigma_aa << ','
+                << "sigma_bb," << sigma_bb << ','
+                << "draw_box," << (draw_box_input ? 1 : 0) << ','
+                << "n_particles," << particles.size() << ','
+                << "n_networks," << n_networks << ','
+                << "n_nodes_total," << total_nodes << ','
+                << "n_edges_total," << total_edges;
+
+        for (std::size_t i = 0; i < n_networks; ++i) {
+                out << ",len_nodes_" << i << "," << networks.networks_nodes[i].size()
+                        << ",len_edges_" << i << "," << networks.networks_edges[i].size();
+        }
+        out << '\n';
+
+        for (const auto& p : particles) {
+                out << "x," << p.pos.x << ','
+                        << "y," << p.pos.y << ','
+                        << "type," << p.type << '\n';
+        }
+
+        for (std::size_t net_idx = 0; net_idx < n_networks; ++net_idx) {
+                const auto& nodes = networks.networks_nodes[net_idx];
+                for (std::size_t node_idx = 0; node_idx < nodes.size(); ++node_idx) {
+                        const auto& node = nodes[node_idx];
+                        out << "net_idx," << net_idx << ','
+                                << "node_idx," << node_idx << ','
+                                << "x," << node.x << ','
+                                << "y," << node.y << '\n';
+                }
+        }
+
+        for (std::size_t net_idx = 0; net_idx < n_networks; ++net_idx) {
+                const auto& edges = networks.networks_edges[net_idx];
+                const auto& nodes = networks.networks_nodes[net_idx];
+                for (std::size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
+                        const auto& edge = edges[edge_idx];
+                        if (edge.node0 < 0 || edge.node1 < 0
+                                || edge.node0 >= static_cast<int>(nodes.size())
+                                || edge.node1 >= static_cast<int>(nodes.size())) {
+                                continue;
+                        }
+                        const auto& node0 = nodes[edge.node0];
+                        const auto& node1 = nodes[edge.node1];
+                        out << "net_idx," << net_idx << ','
+                                << "edge_idx," << edge_idx << ','
+                                << "x0," << node0.x << ','
+                                << "y0," << node0.y << ','
+                                << "x1," << node1.x << ','
+                                << "y1," << node1.y << '\n';
+                }
+        }
+
+        if (!out) {
+                throw std::runtime_error("Failed to write AB network CSV: " + filename);
+        }
+}
+
+void plot_AB_network_python(const std::vector<Particle>& particles,
+                                                     const ABPairNetworks& networks,
+                                                     const std::string& filename,
+                                                     const std::string& csv_path,
+                                                     const double box_w,
+                                                     const double box_h,
+                                                     const double sigma_aa,
+                                                     const double sigma_bb)
+{
+        if (filename.empty()) {
+                throw std::invalid_argument("plot_AB_network_python: filename must not be empty");
+        }
+        if (csv_path.empty()) {
+                throw std::invalid_argument("plot_AB_network_python: csv_path must not be empty");
+        }
+
+        print_AB_network_csv(particles, networks, csv_path, box_w, box_h, sigma_aa, sigma_bb);
+
+        const std::string command =
+                "~/.conda/envs/py3/bin/python ./python/plot_ab_network_python.py --csv_name \"" + csv_path +
+                "\" --output_name \"" + filename + "\" --strict-box-limits";
+
+        const int status = std::system(command.c_str());
+        if (status != 0) {
+                throw std::runtime_error(
+                        "plot_ab_network_python.py failed with status " + std::to_string(status));
         }
 }
 

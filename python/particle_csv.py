@@ -263,6 +263,114 @@ def load_interface_csv(
     return metadata, pos_array, type_array, interfaces
 
 
+def load_ab_network_csv(
+    path: Union[str, Path]
+) -> Tuple[
+    Metadata, np.ndarray, np.ndarray, List[np.ndarray], List[np.ndarray]
+]:
+    """Load metadata, particles, and AB midpoint networks from a CSV."""
+
+    path = Path(path)
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        try:
+            metadata_row = next(reader)
+        except StopIteration as exc:
+            raise ValueError("AB network CSV is empty") from exc
+
+        metadata = _parse_metadata_row(metadata_row)
+        n_particles = int(metadata.get("n_particles", 0))
+        n_networks = int(metadata.get("n_networks", 0))
+
+        positions: list[tuple[float, float]] = []
+        ptypes: list[int] = []
+        for idx in range(n_particles):
+            tokens = _next_tokens(reader)
+            if tokens is None:
+                raise ValueError(
+                    f"Unexpected end of file while reading particle rows (expected {n_particles})"
+                )
+            pos_x, pos_y, particle_type = _parse_particle_tokens(tokens)
+            positions.append((pos_x, pos_y))
+            ptypes.append(particle_type)
+
+        nodes: list[list[tuple[float, float]]] = [[] for _ in range(n_networks)]
+        edges: list[list[tuple[float, float, float, float]]] = [[] for _ in range(n_networks)]
+
+        while True:
+            tokens = _next_tokens(reader)
+            if tokens is None:
+                break
+            if len(tokens) < 4 or tokens[0] != "net_idx":
+                continue
+
+            try:
+                net_idx = int(float(tokens[1]))
+            except ValueError:
+                continue
+            if net_idx < 0:
+                continue
+
+            while len(nodes) <= net_idx:
+                nodes.append([])
+                edges.append([])
+
+            if (
+                len(tokens) == 8
+                and tokens[2] == "node_idx"
+                and tokens[4] == "x"
+                and tokens[6] == "y"
+            ):
+                try:
+                    node_x = float(tokens[5])
+                    node_y = float(tokens[7])
+                except ValueError:
+                    continue
+                nodes[net_idx].append((node_x, node_y))
+            elif (
+                len(tokens) == 12
+                and tokens[2] == "edge_idx"
+                and tokens[4] == "x0"
+                and tokens[6] == "y0"
+                and tokens[8] == "x1"
+                and tokens[10] == "y1"
+            ):
+                try:
+                    x0 = float(tokens[5])
+                    y0 = float(tokens[7])
+                    x1 = float(tokens[9])
+                    y1 = float(tokens[11])
+                except ValueError:
+                    continue
+                edges[net_idx].append((x0, y0, x1, y1))
+
+    pos_array = np.array(positions, dtype=np.float64)
+    if pos_array.size == 0:
+        pos_array = np.zeros((0, 2), dtype=np.float64)
+
+    type_array = (
+        np.array(ptypes, dtype=np.int32) if ptypes else np.zeros((0,), dtype=np.int32)
+    )
+
+    node_arrays: List[np.ndarray] = []
+    for net_nodes in nodes:
+        if net_nodes:
+            node_arrays.append(np.array(net_nodes, dtype=np.float64).reshape(-1, 2))
+        else:
+            node_arrays.append(np.zeros((0, 2), dtype=np.float64))
+
+    edge_arrays: List[np.ndarray] = []
+    for net_edges in edges:
+        if net_edges:
+            edge_arrays.append(
+                np.array(net_edges, dtype=np.float64).reshape(-1, 2, 2)
+            )
+        else:
+            edge_arrays.append(np.zeros((0, 2, 2), dtype=np.float64))
+
+    return metadata, pos_array, type_array, node_arrays, edge_arrays
+
+
 def _setup_plot(
     metadata: Metadata,
     positions: np.ndarray,
@@ -461,6 +569,60 @@ def plot_interface_csv(
     plt.close(fig)
 
 
+def plot_ab_network_csv(
+    csv_path: Union[str, Path],
+    output_path: Union[str, Path],
+    *,
+    dpi: float = 100.0,
+    l_ref: float = 50.0,
+    strict_box_limits: bool = False,
+) -> None:
+    """Render AB midpoint networks and particles from a CSV."""
+
+    metadata, positions, types, nodes, edges = load_ab_network_csv(csv_path)
+    fig, ax, fig_width_in, box_w, _, draw_box, bounds = _setup_plot(
+        metadata, positions, dpi, l_ref, strict_box_limits
+    )
+    _scatter_particles(ax, positions, types, metadata, fig_width_in, box_w)
+
+    n_networks = max(len(nodes), len(edges))
+    if n_networks > 0:
+        colors = plt.get_cmap("tab10")
+        for idx in range(n_networks):
+            color = colors(idx % 10)
+            node_arr = nodes[idx] if idx < len(nodes) else np.zeros((0, 2))
+            edge_arr = edges[idx] if idx < len(edges) else np.zeros((0, 2, 2))
+
+            if edge_arr.size > 0:
+                for seg in edge_arr:
+                    ax.plot(
+                        [seg[0, 0], seg[1, 0]],
+                        [seg[0, 1], seg[1, 1]],
+                        c=color,
+                        linewidth=1.0,
+                        alpha=0.9,
+                    )
+
+            if node_arr.size > 0:
+                ax.scatter(
+                    node_arr[:, 0],
+                    node_arr[:, 1],
+                    s=12.0,
+                    facecolors=color,
+                    edgecolors="black",
+                    linewidths=0.2,
+                    zorder=3,
+                )
+
+    ax.set_title("A–B midpoint networks")
+    _finalize_plot(ax, draw_box, bounds)
+    fig.tight_layout()
+
+    output_path = Path(output_path)
+    fig.savefig(output_path, dpi=dpi)
+    plt.close(fig)
+
+
 __all__ = [
     "load_particle_csv",
     "plot_particle_csv",
@@ -468,4 +630,6 @@ __all__ = [
     "plot_triangulation_csv",
     "load_interface_csv",
     "plot_interface_csv",
+    "load_ab_network_csv",
+    "plot_ab_network_csv",
 ]

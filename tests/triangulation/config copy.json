@@ -20,19 +20,14 @@
     "load_name": "",
     "n_particles_global": 10240,
     "n_particles_type0": 5120,
-    "save_dt_interval": 10.0,
+    "save_dt_interval": 0.1,
     
-    "mu": 0.0,
-    "v0": 0.0,
-    "D_r": 0.0,
-    "D_theta": 0.0,
-
     "n_halo_left": 0,
     "n_halo_right": 0,
     "n_local": 0,
 
     "rank_idx": 0,
-    "rank_size": 4,
+    "rank_size": 1,
     "right_rank": 0,
     "left_rank": 0,
     "x_max": 0.0,

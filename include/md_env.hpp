@@ -88,8 +88,12 @@ public:
                                          const std::string &csv_path);
 
     // Rank 0 only: build A–B mid-segment networks from a triangulation (mixed A/B
-    // triangles → midpoint graphs).
-    ABPairNetworks get_AB_pair_network(const TriangulationResult &tri) const;
+    // triangles → midpoint graphs). When is_plot is true, also emit a CSV + image
+    // for the current frame and network.
+    ABPairNetworks get_AB_pair_network(const TriangulationResult &tri,
+                                                                           bool is_plot = false,
+                                                                           const std::string &filename = "",
+                                                                           const std::string &csv_path = "") const;
 
     std::vector<std::vector<double>>
     locate_interface(const delaunator::Delaunator &d);

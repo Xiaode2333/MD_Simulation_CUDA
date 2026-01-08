@@ -89,6 +89,9 @@ int main(){
                 std::string frame_triangulation_path = frame_dir + fmt::format("triangulation_frame_step_{}.svg", step);
                 std::string csv_path_triangulation   = csv_dir + fmt::format("triangulation_frame_step_{}.csv", step);
 
+                std::string frame_ab_network_path = frame_dir + fmt::format("ab_network_frame_step_{}.svg", step);
+                std::string csv_path_ab_network   = csv_dir + fmt::format("ab_network_frame_step_{}.csv", step);
+
                 // std::string frame_interface_path = interface_dir + fmt::format("interface_step_{}.svg", step);
                 // std::string csv_path_interface = csv_dir + fmt::format("interface_step_{}.csv", step);
 
@@ -96,7 +99,12 @@ int main(){
                 // sim.plot_particles(frame_path, csv_path);
                 
                 RankZeroPrint(rank_idx, "[Step] {}. triangulation_plot.\n", step);
-                sim.triangulation_plot(true, frame_triangulation_path, csv_path_triangulation);
+                auto tri_result = sim.triangulation_plot(true, frame_triangulation_path, csv_path_triangulation);
+                if (tri_result) {
+                    RankZeroPrint(rank_idx, "[Step] {}. plotting AB networks.\n", step);
+                    sim.get_AB_pair_network(*tri_result, true, frame_ab_network_path,
+                                            csv_path_ab_network);
+                }
                 
                 // RankZeroPrint(rank_idx, "[Step] {}. plot_interfaces.\n", step);
                 // sim.plot_interfaces(frame_interface_path, csv_path_interface, density_profile);

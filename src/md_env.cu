@@ -2271,8 +2271,10 @@ MDSimulation::triangulation_plot(bool is_plot, const std::string &filename,
     }
 }
 
-ABPairNetworks
-MDSimulation::get_AB_pair_network(const TriangulationResult &tri) const {
+ABPairNetworks MDSimulation::get_AB_pair_network(const TriangulationResult &tri,
+                                                                                    bool is_plot,
+                                                                                    const std::string &filename,
+                                                                                    const std::string &csv_path) const {
     ABPairNetworks result;
 
     if (cfg_manager.config.rank_idx != 0) {
@@ -2450,6 +2452,33 @@ MDSimulation::get_AB_pair_network(const TriangulationResult &tri) const {
         if (u < 0 || v < 0)
             continue;
         result.networks_edges[cid].push_back(ABPairNetworks::Edge{u, v});
+    }
+
+    if (is_plot) {
+        auto RankZeroPrintConst = [&](fmt::string_view fmt_str,
+                                                              auto &&...args) {
+            if (cfg_manager.config.rank_idx == 0) {
+                fmt::print(fmt_str, std::forward<decltype(args)>(args)...);
+                std::fflush(stdout);
+            }
+        };
+        if (filename.empty() || csv_path.empty()) {
+            RankZeroPrintConst(
+                    "[Warning] AB pair network plot skipped: filename or csv_path is empty.\n");
+        } else if (result.networks_nodes.empty()) {
+            RankZeroPrintConst("[Warning] No AB pair networks detected to plot.\n");
+        } else {
+            try {
+                plot_AB_network_python(
+                        h_particles, result, filename, csv_path,
+                        cfg_manager.config.box_w_global,
+                        cfg_manager.config.box_h_global, cfg_manager.config.SIGMA_AA,
+                        cfg_manager.config.SIGMA_BB);
+            } catch (const std::exception &e) {
+                RankZeroPrintConst("[Warning] AB pair network plot failed: {}\n",
+                                                       e.what());
+            }
+        }
     }
 
     return result;
