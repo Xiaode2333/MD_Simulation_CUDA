@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_ROOT="results/20260108_test_area_with_num_tri_types"
+BASE_ROOT="results/20260113_test_area_with_num_tri_types"
 ORI_CONFIG="${BASE_ROOT}/config.json"
 
 if [ ! -f "$ORI_CONFIG" ]; then
