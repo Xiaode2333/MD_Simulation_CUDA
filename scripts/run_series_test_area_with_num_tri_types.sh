@@ -39,7 +39,7 @@ module load OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0
 module load UCX-CUDA/1.16.0-GCCcore-13.3.0-CUDA-12.6.0
 module load NCCL/2.22.3-GCCcore-13.3.0-CUDA-12.6.0
 module load UCC-CUDA/1.3.0-GCCcore-13.3.0-CUDA-12.6.0
-module load miniconda/24.11.3
+module load miniconda/24.7.1
 module load git/2.45.1-GCCcore-13.3.0
 module load CMake/3.29.3-GCCcore-13.3.0
 module load nlohmann_json/3.11.3-GCCcore-13.3.0
@@ -51,7 +51,7 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 
 # Source conda profile directly to ensure 'conda' command exists
-source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
+source /apps/software/2022b/software/miniconda/24.7.1/etc/profile.d/conda.sh
 conda activate py3
 
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
