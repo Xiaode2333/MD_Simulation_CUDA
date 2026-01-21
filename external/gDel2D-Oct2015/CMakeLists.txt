@@ -1,5 +1,6 @@
 project(gflip2d)
 cmake_minimum_required(VERSION 2.8)
+set(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
 find_package(CUDA REQUIRED)
 
 # Visualization (OpenGL / GLEW / GLUT) is disabled for this build.

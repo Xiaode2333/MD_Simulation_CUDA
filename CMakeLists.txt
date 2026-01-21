@@ -26,6 +26,8 @@ find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
+set(raft_DIR "/home/bh692/.conda/envs/py3/lib/cmake/raft")
+find_package(raft REQUIRED)
 
 # ---- Header-only Libs ----
 find_path(DELAUNATOR_CPP_INCLUDE_DIRS "delaunator-header-only.hpp")
@@ -133,10 +135,17 @@ target_link_libraries(md_particle_lib
         gdel2d_lib
         MPI::MPI_CXX
         ZLIB::ZLIB
+        raft::raft
+        CUDA::cusparse
+        CUDA::cublas
+        CUDA::cusolver
 )
 
 # ---- Tests ----
-file(GLOB_RECURSE TEST_SOURCES "${TESTS_DIR}/*/*.cpp")
+file(GLOB_RECURSE TEST_SOURCES
+    "${TESTS_DIR}/*/*.cpp"
+    "${TESTS_DIR}/*/*.cu"
+)
 
 foreach(test_src IN LISTS TEST_SOURCES)
     get_filename_component(test_name "${test_src}" NAME_WE)

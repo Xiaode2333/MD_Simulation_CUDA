@@ -38,6 +38,11 @@ int main(){
     int THREADS_PER_BLOCK = 256;
     int rank_size = world_size;
 
+    double mu = 1.0;
+    double v0 = 0.0;
+    double D_r = 0.0;
+    double D_theta = 0.0;
+
     // This rank's prarams
     int rank_idx = 0;
     int n_local = 0;
@@ -75,6 +80,11 @@ int main(){
         load_name, // if needed to load from file
         THREADS_PER_BLOCK,
         rank_size,
+
+        mu,
+        v0,
+        D_r,
+        D_theta,
 
         rank_idx,
         n_local,

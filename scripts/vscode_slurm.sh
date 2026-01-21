@@ -1,7 +1,8 @@
 #!/bin/bash
-#SBATCH --partition=day
+#SBATCH --partition=pi_co54
+#SBATCH --gpus 1
 #SBATCH -c 1
-#SBATCH -t 10:00:00
+#SBATCH -t 1-00:00:00
 #SBATCH --mem=15G
 #SBATCH --output=vscode_slurm.out
 

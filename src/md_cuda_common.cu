@@ -2,6 +2,16 @@
 #include "md_particle.hpp"
 #include <thrust/device_vector.h>
 #include <thrust/fill.h>
+#include <type_traits>
+#include <optional>
+#include <cstdint>
+
+#include <raft/core/resources.hpp>
+#include <raft/core/resource/cuda_stream.hpp>
+#include <raft/core/device_mdspan.hpp>
+#include <raft/sparse/solver/lanczos.cuh>
+#include <raft/sparse/solver/lanczos_types.hpp>
+#include <rmm/device_uvector.hpp>
 
 __global__ void middle_reflect_LG_kernel(Particle *particles, int n, double Lx,
                                                                                  double Ly, double slab_width) {
@@ -840,3 +850,68 @@ __global__ void init_ABP_rng_kernel(curandState *states, int n,
     // Initialize with unique sequence number per particle
     curand_init(seed, idx, 0, &states[idx]);
 }
+
+template <typename IndexT, typename ValueT>
+void cal_eigen(int n_rows, int nnz, const IndexT *d_row_offsets,
+               const IndexT *d_col_indices, const ValueT *d_values, int num_eig,
+               int max_iterations, int ncv, ValueT tolerance, uint64_t seed,
+               ValueT *d_eigvals, ValueT *d_eigvecs) {
+    if (n_rows <= 0 || nnz <= 0 || num_eig <= 0 || num_eig > n_rows) {
+        fprintf(stderr,
+                "cal_eigen: invalid inputs (n_rows=%d, nnz=%d, num_eig=%d)\n",
+                n_rows, nnz, num_eig);
+        exit(EXIT_FAILURE);
+    }
+
+    raft::resources handle;
+    auto stream = raft::resource::get_cuda_stream(handle);
+
+    // Copy CSR data into RMM-owned buffers to match RAFT expectations.
+    rmm::device_uvector<IndexT> rows(static_cast<size_t>(n_rows + 1), stream);
+    rmm::device_uvector<IndexT> cols(static_cast<size_t>(nnz), stream);
+    rmm::device_uvector<ValueT> vals(static_cast<size_t>(nnz), stream);
+
+    CUDA_CHECK(cudaMemcpyAsync(rows.data(), d_row_offsets,
+                               static_cast<size_t>(n_rows + 1) * sizeof(IndexT),
+                               cudaMemcpyDeviceToDevice, stream.value()));
+    CUDA_CHECK(cudaMemcpyAsync(cols.data(), d_col_indices,
+                               static_cast<size_t>(nnz) * sizeof(IndexT),
+                               cudaMemcpyDeviceToDevice, stream.value()));
+    CUDA_CHECK(cudaMemcpyAsync(vals.data(), d_values,
+                               static_cast<size_t>(nnz) * sizeof(ValueT),
+                               cudaMemcpyDeviceToDevice, stream.value()));
+
+    auto rows_view = raft::make_device_vector_view<IndexT, uint32_t>(
+            rows.data(), static_cast<uint32_t>(n_rows + 1));
+    auto cols_view = raft::make_device_vector_view<IndexT, uint32_t>(
+            cols.data(), static_cast<uint32_t>(nnz));
+    auto vals_view = raft::make_device_vector_view<ValueT, uint32_t>(
+            vals.data(), static_cast<uint32_t>(nnz));
+
+    auto eigvals_view = raft::make_device_vector_view<ValueT, uint32_t, raft::col_major>(
+            d_eigvals, static_cast<uint32_t>(num_eig));
+    auto eigvecs_view = raft::make_device_matrix_view<ValueT, uint32_t, raft::col_major>(
+            d_eigvecs, static_cast<uint32_t>(n_rows), static_cast<uint32_t>(num_eig));
+
+    raft::sparse::solver::lanczos_solver_config<ValueT> config{
+            num_eig, max_iterations, ncv, tolerance,
+            raft::sparse::solver::LANCZOS_WHICH::SA, seed};
+
+    int status = raft::sparse::solver::lanczos_compute_smallest_eigenvectors<IndexT, ValueT>(
+            handle, config, rows_view, cols_view, vals_view, std::nullopt,
+            eigvals_view, eigvecs_view);
+
+    if (status != 0) {
+        fprintf(stderr, "cal_eigen: Lanczos solver failed with status %d\n", status);
+        exit(EXIT_FAILURE);
+    }
+
+    CUDA_CHECK(cudaStreamSynchronize(stream.value()));
+}
+
+template void cal_eigen<int32_t, float>(int, int, const int32_t *, const int32_t *,
+                                        const float *, int, int, int, float, uint64_t,
+                                        float *, float *);
+template void cal_eigen<int32_t, double>(int, int, const int32_t *, const int32_t *,
+                                         const double *, int, int, int, double, uint64_t,
+                                         double *, double *);
