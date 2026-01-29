@@ -41,6 +41,7 @@ cuda_add_executable(
 
 target_link_libraries(${PROJECT_NAME}
     gdel2d_lib
+    dl
 )
 
 # Keep CMake output non-verbose to avoid noisy build logs.

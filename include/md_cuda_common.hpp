@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <cstdint>
+#include <thrust/device_vector.h>
 
 #define CUDA_CHECK(call)                                                         \
     do {                                                                        \
@@ -127,6 +128,45 @@ __global__ void local_pressure_tensor_profile_kernel(
         double epsilon_BB, double epsilon_AB, double cutoff, int n_bins_local,
         double *__restrict__ P_xx, double *__restrict__ P_yy,
         double *__restrict__ P_xy);
+
+// Compute Hessian blocks of Lennard–Jones potential for two disjoint
+// subsystems. Coordinates are ordered (x0, y0, x1, y1, ...).
+// Inputs:
+//   particles          : device array of length n (full frame)
+//   sub1_indices       : device array of particle indices in subsystem 1
+//   sub2_indices       : device array of particle indices in subsystem 2
+//   Lx, Ly             : box dimensions for minimum-image convention
+//   sigma_**, epsilon_**: LJ parameters (AA, BB, AB) and cutoff (dimensionless)
+// Outputs (all device, resized by caller):
+//   H11 (2*n1 x 2*n1), H12 (2*n1 x 2*n2), H21 (2*n2 x 2*n1), H22 (2*n2 x 2*n2)
+void compute_hessian_LJ_blocks(
+        const thrust::device_vector<Particle> &d_particles,
+        const thrust::device_vector<int> &d_sub1_indices,
+        const thrust::device_vector<int> &d_sub2_indices, double Lx, double Ly,
+        double sigma_AA, double sigma_BB, double sigma_AB, double epsilon_AA,
+        double epsilon_BB, double epsilon_AB, double cutoff,
+        thrust::device_vector<double> &d_H11,
+        thrust::device_vector<double> &d_H12,
+        thrust::device_vector<double> &d_H21,
+        thrust::device_vector<double> &d_H22);
+
+// Host-friendly wrapper: accepts host vectors, performs device computation, and
+// returns dense Hessian blocks on host.
+void compute_hessian_LJ_blocks_host(
+        const std::vector<Particle> &h_particles,
+        const std::vector<int> &sub1_indices,
+        const std::vector<int> &sub2_indices, double Lx, double Ly,
+        double sigma_AA, double sigma_BB, double sigma_AB, double epsilon_AA,
+        double epsilon_BB, double epsilon_AB, double cutoff,
+        std::vector<double> &H11, std::vector<double> &H12,
+        std::vector<double> &H21, std::vector<double> &H22);
+
+// Host wrapper: compute k smallest eigenvalues of a dense symmetric matrix
+// provided in row-major on host. Uses device Lanczos (cal_eigen) internally.
+void compute_smallest_eigs_dense_host(const std::vector<double> &H, int dim,
+                                      int k, int max_iterations, int ncv,
+                                      double tol, uint64_t seed,
+                                      std::vector<double> &eigvals_out);
 
 // ABP (Active Brownian Particle) overdamped integration kernel
 // Implements Euler-Maruyama scheme for overdamped Langevin dynamics with

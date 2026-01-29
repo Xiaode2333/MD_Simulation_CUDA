@@ -2,9 +2,19 @@
 #include "md_particle.hpp"
 #include <thrust/device_vector.h>
 #include <thrust/fill.h>
+#include <thrust/host_vector.h>
 #include <type_traits>
 #include <optional>
 #include <cstdint>
+#include <cmath>
+#if __has_include(<memory_resource>)
+  #include <memory_resource>
+#else
+  #include <experimental/memory_resource>
+  namespace std {
+  namespace pmr = std::experimental::pmr;
+  }
+#endif
 
 #include <raft/core/resources.hpp>
 #include <raft/core/resource/cuda_stream.hpp>
@@ -777,6 +787,308 @@ __global__ void local_pressure_tensor_profile_kernel(
             atomicAdd(&P_xy[bin_pair], vir_xy);
         }
     }
+}
+
+// Hessian utilities for LJ potential split into subsystem blocks
+__global__ void build_subsystem_pos_kernel(const int *sub_indices, int n_sub,
+                                           int *map_out) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n_sub) {
+        map_out[sub_indices[idx]] = idx;
+    }
+}
+
+__device__ inline void atomicAdd2(double *base, int ld, int row, int col,
+                                  double val) {
+    atomicAdd(base + static_cast<size_t>(row) * ld + col, val);
+}
+
+__global__ void hessian_LJ_blocks_kernel(
+        const Particle *__restrict__ particles, int n,
+        const int *__restrict__ map_sub1, const int *__restrict__ map_sub2,
+        int n1, int n2, double Lx, double Ly, double sigma_AA, double sigma_BB,
+        double sigma_AB, double epsilon_AA, double epsilon_BB,
+        double epsilon_AB, double cutoff, double *__restrict__ H11,
+        double *__restrict__ H12, double *__restrict__ H21,
+        double *__restrict__ H22) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+
+    const double2 ri = particles[i].pos;
+    const int type_i = particles[i].type;
+    const int pos1_i = map_sub1[i];
+    const int pos2_i = map_sub2[i];
+
+    for (int j = i + 1; j < n; ++j) {
+        const double2 rj = particles[j].pos;
+        const int type_j = particles[j].type;
+
+        double dx = ri.x - rj.x;
+        double dy = ri.y - rj.y;
+
+        dx = dx - Lx * round(dx / Lx);
+        dy = dy - Ly * round(dy / Ly);
+
+        double sigma = 0.0;
+        double epsilon = 0.0;
+        if (type_i == 0 && type_j == 0) {
+            sigma = sigma_AA;
+            epsilon = epsilon_AA;
+        } else if (type_i == 1 && type_j == 1) {
+            sigma = sigma_BB;
+            epsilon = epsilon_BB;
+        } else {
+            sigma = sigma_AB;
+            epsilon = epsilon_AB;
+        }
+
+        const double rc = cutoff * sigma;
+        const double rc_sq = rc * rc;
+
+        const double dr_sq = dx * dx + dy * dy;
+        if (dr_sq <= 0.0 || dr_sq >= rc_sq) {
+            continue;
+        }
+
+        const double r = sqrt(dr_sq);
+        const double inv_r = 1.0 / r;
+        const double sr = sigma * inv_r;
+        const double sr2 = sr * sr;
+        const double sr6 = sr2 * sr2 * sr2;
+        const double sr12 = sr6 * sr6;
+
+        const double Vp =
+                24.0 * epsilon * (-2.0 * sr12 + sr6) * inv_r; // dU/dr
+        const double Vpp = (24.0 * epsilon / (r * r)) *
+                           (26.0 * sr12 - 7.0 * sr6); // d^2U/dr^2
+
+        const double rhatx = dx * inv_r;
+        const double rhaty = dy * inv_r;
+
+        const double common1 = Vpp - Vp * inv_r;
+        const double common2 = Vp * inv_r;
+
+        const double Kxx = common1 * rhatx * rhatx + common2;
+        const double Kxy = common1 * rhatx * rhaty;
+        const double Kyx = Kxy;
+        const double Kyy = common1 * rhaty * rhaty + common2;
+
+        const int pos1_j = map_sub1[j];
+        const int pos2_j = map_sub2[j];
+
+        // Self blocks (+K)
+        if (pos1_i >= 0) {
+            const int row = 2 * pos1_i;
+            atomicAdd2(H11, 2 * n1, row, row, Kxx);
+            atomicAdd2(H11, 2 * n1, row, row + 1, Kxy);
+            atomicAdd2(H11, 2 * n1, row + 1, row, Kyx);
+            atomicAdd2(H11, 2 * n1, row + 1, row + 1, Kyy);
+        } else if (pos2_i >= 0) {
+            const int row = 2 * pos2_i;
+            atomicAdd2(H22, 2 * n2, row, row, Kxx);
+            atomicAdd2(H22, 2 * n2, row, row + 1, Kxy);
+            atomicAdd2(H22, 2 * n2, row + 1, row, Kyx);
+            atomicAdd2(H22, 2 * n2, row + 1, row + 1, Kyy);
+        }
+
+        if (pos1_j >= 0) {
+            const int row = 2 * pos1_j;
+            atomicAdd2(H11, 2 * n1, row, row, Kxx);
+            atomicAdd2(H11, 2 * n1, row, row + 1, Kxy);
+            atomicAdd2(H11, 2 * n1, row + 1, row, Kyx);
+            atomicAdd2(H11, 2 * n1, row + 1, row + 1, Kyy);
+        } else if (pos2_j >= 0) {
+            const int row = 2 * pos2_j;
+            atomicAdd2(H22, 2 * n2, row, row, Kxx);
+            atomicAdd2(H22, 2 * n2, row, row + 1, Kxy);
+            atomicAdd2(H22, 2 * n2, row + 1, row, Kyx);
+            atomicAdd2(H22, 2 * n2, row + 1, row + 1, Kyy);
+        }
+
+        // Cross blocks (-K)
+        if (pos1_i >= 0 && pos1_j >= 0) {
+            const int ri = 2 * pos1_i;
+            const int rj = 2 * pos1_j;
+            atomicAdd2(H11, 2 * n1, ri, rj, -Kxx);
+            atomicAdd2(H11, 2 * n1, ri, rj + 1, -Kxy);
+            atomicAdd2(H11, 2 * n1, ri + 1, rj, -Kyx);
+            atomicAdd2(H11, 2 * n1, ri + 1, rj + 1, -Kyy);
+
+            atomicAdd2(H11, 2 * n1, rj, ri, -Kxx);
+            atomicAdd2(H11, 2 * n1, rj, ri + 1, -Kxy);
+            atomicAdd2(H11, 2 * n1, rj + 1, ri, -Kyx);
+            atomicAdd2(H11, 2 * n1, rj + 1, ri + 1, -Kyy);
+        } else if (pos2_i >= 0 && pos2_j >= 0) {
+            const int ri = 2 * pos2_i;
+            const int rj = 2 * pos2_j;
+            atomicAdd2(H22, 2 * n2, ri, rj, -Kxx);
+            atomicAdd2(H22, 2 * n2, ri, rj + 1, -Kxy);
+            atomicAdd2(H22, 2 * n2, ri + 1, rj, -Kyx);
+            atomicAdd2(H22, 2 * n2, ri + 1, rj + 1, -Kyy);
+
+            atomicAdd2(H22, 2 * n2, rj, ri, -Kxx);
+            atomicAdd2(H22, 2 * n2, rj, ri + 1, -Kxy);
+            atomicAdd2(H22, 2 * n2, rj + 1, ri, -Kyx);
+            atomicAdd2(H22, 2 * n2, rj + 1, ri + 1, -Kyy);
+        } else if (pos1_i >= 0 && pos2_j >= 0) {
+            const int ri = 2 * pos1_i;
+            const int cj = 2 * pos2_j;
+            atomicAdd2(H12, 2 * n2, ri, cj, -Kxx);
+            atomicAdd2(H12, 2 * n2, ri, cj + 1, -Kxy);
+            atomicAdd2(H12, 2 * n2, ri + 1, cj, -Kyx);
+            atomicAdd2(H12, 2 * n2, ri + 1, cj + 1, -Kyy);
+
+            const int rj = cj;
+            const int ci = ri;
+            atomicAdd2(H21, 2 * n1, rj, ci, -Kxx);
+            atomicAdd2(H21, 2 * n1, rj, ci + 1, -Kxy);
+            atomicAdd2(H21, 2 * n1, rj + 1, ci, -Kyx);
+            atomicAdd2(H21, 2 * n1, rj + 1, ci + 1, -Kyy);
+        } else if (pos2_i >= 0 && pos1_j >= 0) {
+            const int ri = 2 * pos2_i;
+            const int cj = 2 * pos1_j;
+            atomicAdd2(H21, 2 * n1, ri, cj, -Kxx);
+            atomicAdd2(H21, 2 * n1, ri, cj + 1, -Kxy);
+            atomicAdd2(H21, 2 * n1, ri + 1, cj, -Kyx);
+            atomicAdd2(H21, 2 * n1, ri + 1, cj + 1, -Kyy);
+
+            const int rj = cj;
+            const int ci = ri;
+            atomicAdd2(H12, 2 * n2, rj, ci, -Kxx);
+            atomicAdd2(H12, 2 * n2, rj, ci + 1, -Kxy);
+            atomicAdd2(H12, 2 * n2, rj + 1, ci, -Kyx);
+            atomicAdd2(H12, 2 * n2, rj + 1, ci + 1, -Kyy);
+        }
+    }
+}
+
+void compute_hessian_LJ_blocks(
+        const thrust::device_vector<Particle> &d_particles,
+        const thrust::device_vector<int> &d_sub1_indices,
+        const thrust::device_vector<int> &d_sub2_indices, double Lx, double Ly,
+        double sigma_AA, double sigma_BB, double sigma_AB, double epsilon_AA,
+        double epsilon_BB, double epsilon_AB, double cutoff,
+        thrust::device_vector<double> &d_H11,
+        thrust::device_vector<double> &d_H12,
+        thrust::device_vector<double> &d_H21,
+        thrust::device_vector<double> &d_H22) {
+    const int n = static_cast<int>(d_particles.size());
+    const int n1 = static_cast<int>(d_sub1_indices.size());
+    const int n2 = static_cast<int>(d_sub2_indices.size());
+
+    if (n == 0 || (n1 == 0 && n2 == 0)) {
+        d_H11.clear();
+        d_H12.clear();
+        d_H21.clear();
+        d_H22.clear();
+        return;
+    }
+
+    thrust::device_vector<int> d_map_sub1(n, -1);
+    thrust::device_vector<int> d_map_sub2(n, -1);
+
+    int threads = 256;
+    int blocks1 = (n1 + threads - 1) / threads;
+    int blocks2 = (n2 + threads - 1) / threads;
+
+    build_subsystem_pos_kernel<<<blocks1, threads>>>(
+            thrust::raw_pointer_cast(d_sub1_indices.data()), n1,
+            thrust::raw_pointer_cast(d_map_sub1.data()));
+    build_subsystem_pos_kernel<<<blocks2, threads>>>(
+            thrust::raw_pointer_cast(d_sub2_indices.data()), n2,
+            thrust::raw_pointer_cast(d_map_sub2.data()));
+    CUDA_CHECK(cudaGetLastError());
+
+    const int dim1 = 2 * n1;
+    const int dim2 = 2 * n2;
+    d_H11.assign(static_cast<size_t>(dim1) * dim1, 0.0);
+    d_H22.assign(static_cast<size_t>(dim2) * dim2, 0.0);
+    d_H12.assign(static_cast<size_t>(dim1) * dim2, 0.0);
+    d_H21.assign(static_cast<size_t>(dim2) * dim1, 0.0);
+
+    int blocks = (n + threads - 1) / threads;
+    hessian_LJ_blocks_kernel<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_particles.data()), n,
+            thrust::raw_pointer_cast(d_map_sub1.data()),
+            thrust::raw_pointer_cast(d_map_sub2.data()), n1, n2, Lx, Ly,
+            sigma_AA, sigma_BB, sigma_AB, epsilon_AA, epsilon_BB, epsilon_AB,
+            cutoff, thrust::raw_pointer_cast(d_H11.data()),
+            thrust::raw_pointer_cast(d_H12.data()),
+            thrust::raw_pointer_cast(d_H21.data()),
+            thrust::raw_pointer_cast(d_H22.data()));
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+void compute_hessian_LJ_blocks_host(
+        const std::vector<Particle> &h_particles,
+        const std::vector<int> &sub1_indices,
+        const std::vector<int> &sub2_indices, double Lx, double Ly,
+        double sigma_AA, double sigma_BB, double sigma_AB, double epsilon_AA,
+        double epsilon_BB, double epsilon_AB, double cutoff,
+        std::vector<double> &H11, std::vector<double> &H12,
+        std::vector<double> &H21, std::vector<double> &H22) {
+    thrust::device_vector<Particle> d_particles(h_particles.begin(),
+                                                h_particles.end());
+    thrust::device_vector<int> d_sub1(sub1_indices.begin(), sub1_indices.end());
+    thrust::device_vector<int> d_sub2(sub2_indices.begin(), sub2_indices.end());
+
+    thrust::device_vector<double> d_H11, d_H12, d_H21, d_H22;
+    compute_hessian_LJ_blocks(d_particles, d_sub1, d_sub2, Lx, Ly, sigma_AA,
+                              sigma_BB, sigma_AB, epsilon_AA, epsilon_BB,
+                              epsilon_AB, cutoff, d_H11, d_H12, d_H21, d_H22);
+
+    H11.assign(d_H11.begin(), d_H11.end());
+    H12.assign(d_H12.begin(), d_H12.end());
+    H21.assign(d_H21.begin(), d_H21.end());
+    H22.assign(d_H22.begin(), d_H22.end());
+}
+
+void compute_smallest_eigs_dense_host(const std::vector<double> &H, int dim,
+                                      int k, int max_iterations, int ncv,
+                                      double tol, uint64_t seed,
+                                      std::vector<double> &eigvals_out) {
+    if (dim <= 0 || k <= 0 || H.size() != static_cast<std::size_t>(dim) * dim) {
+        eigvals_out.clear();
+        return;
+    }
+
+    const int nnz = dim * dim;
+    thrust::device_vector<int32_t> d_row_offsets(dim + 1);
+    thrust::device_vector<int32_t> d_col_indices(nnz);
+    thrust::device_vector<double> d_values(H.begin(), H.end());
+
+    // CSR for dense row-major
+    thrust::host_vector<int32_t> h_row_offsets(dim + 1);
+    thrust::host_vector<int32_t> h_col_indices(nnz);
+    for (int i = 0; i <= dim; ++i) {
+        h_row_offsets[i] = i * dim;
+    }
+    for (int i = 0; i < dim; ++i) {
+        for (int j = 0; j < dim; ++j) {
+            h_col_indices[i * dim + j] = j;
+        }
+    }
+    d_row_offsets = h_row_offsets;
+    d_col_indices = h_col_indices;
+
+    thrust::device_vector<double> d_eigvals(k);
+    thrust::device_vector<double> d_eigvecs(static_cast<size_t>(dim) * k);
+
+    int ncv_eff = ncv;
+    if (ncv_eff <= 0) ncv_eff = std::max(k * 2 + 1, 32);
+    if (ncv_eff >= dim && dim > 1) ncv_eff = dim - 1;
+
+    cal_eigen<int32_t, double>(
+            dim, nnz, thrust::raw_pointer_cast(d_row_offsets.data()),
+            thrust::raw_pointer_cast(d_col_indices.data()),
+            thrust::raw_pointer_cast(d_values.data()), k, max_iterations,
+            ncv_eff, tol, seed, thrust::raw_pointer_cast(d_eigvals.data()),
+            thrust::raw_pointer_cast(d_eigvecs.data()));
+
+    eigvals_out.assign(d_eigvals.begin(), d_eigvals.end());
 }
 
 // ABP (Active Brownian Particle) overdamped integration kernel

@@ -2,10 +2,27 @@ cmake_minimum_required(VERSION 3.18)
 
 project(CUDA2_MD LANGUAGES C CXX CUDA)
 
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+# Hide noisy RAFT deprecation #pragma messages that come from transitive includes.
+# We rely on the installed RAFT API and just want clean build output.
+add_compile_definitions(RAFT_HIDE_DEPRECATION_WARNINGS)
+
 # --------------------------------------------------------
-# FIX 1: Force older debug info format (Fixes 'as' error on cluster)
+# Debug info flag compatibility
 # --------------------------------------------------------
-add_compile_options("-gdwarf-4")
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-gdwarf-4" HAS_GDWARF4)
+if (HAS_GDWARF4)
+    add_compile_options("-gdwarf-4")
+else()
+    message(WARNING "Compiler/assembler does not support -gdwarf-4; disabling debug info with -g0")
+    add_compile_options("-g0")
+endif()
+# CUDA host compilation can still emit unsupported DWARF flags; force no debug
+add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-g0>)
 
 # ---- Language Standards ----
 set(CMAKE_CXX_STANDARD 17)
@@ -13,11 +30,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER})
+# Disable linker dependency files (ld.bfd on this system does not support
+# --dependency-file), otherwise linking fails with "unrecognized option".
+set(CMAKE_LINK_DEPENDS_USE_LINKER FALSE)
+set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING "Use shared CUDA runtime" FORCE)
+set(CMAKE_CUDA_SEPARABLE_COMPILATION OFF)
 set(GCC_LIB_PATH "/apps/software/2024a/software/GCCcore/13.3.0/lib64")
 set(CMAKE_CUDA_ARCHITECTURES 89)
+link_directories(/apps/software/2024a/software/CUDA/12.6.0/lib64)
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L/apps/software/2024a/software/CUDA/12.6.0/lib64")
 
 
 add_link_options("-L${GCC_LIB_PATH}" "-Wl,-rpath,${GCC_LIB_PATH}")
+# Keep the CUDA 12.6 toolchain libs ahead of any conda CUDA shims at runtime.
+set(CUDA_TOOLCHAIN_LIB "/apps/software/2024a/software/CUDA/12.6.0/lib64")
+add_link_options("-Wl,-rpath,${CUDA_TOOLCHAIN_LIB}")
+list(APPEND CMAKE_BUILD_RPATH "${CUDA_TOOLCHAIN_LIB}")
+list(APPEND CMAKE_INSTALL_RPATH "${CUDA_TOOLCHAIN_LIB}")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # ---- Core Packages ----
 find_package(CUDAToolkit REQUIRED)
@@ -129,7 +159,7 @@ target_include_directories(md_particle_lib
 
 target_link_libraries(md_particle_lib
     PUBLIC
-        fmt::fmt
+        fmt::fmt-header-only
         Python3::Python
         nlohmann_json::nlohmann_json
         gdel2d_lib
@@ -139,7 +169,10 @@ target_link_libraries(md_particle_lib
         CUDA::cusparse
         CUDA::cublas
         CUDA::cusolver
+        CUDA::cudart
 )
+set_target_properties(md_particle_lib PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
+target_link_directories(md_particle_lib PUBLIC /apps/software/2024a/software/CUDA/12.6.0/lib64)
 
 # ---- Tests ----
 file(GLOB_RECURSE TEST_SOURCES
@@ -161,6 +194,7 @@ foreach(test_src IN LISTS TEST_SOURCES)
             md_particle_lib
             MPI::MPI_CXX
     )
+    target_link_directories("${exe_name}" PRIVATE /apps/software/2024a/software/CUDA/12.6.0/lib64)
 
     target_include_directories("${exe_name}"
         PRIVATE
@@ -172,6 +206,11 @@ foreach(test_src IN LISTS TEST_SOURCES)
             ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
     )
 endforeach()
+
+# Avoid assembler incompatibility with -gdwarf-4 on this target
+if (TARGET run_test_run_test)
+    target_compile_options(run_test_run_test PRIVATE -g0)
+endif()
 
 # formal runs
 file(GLOB_RECURSE RUN_SOURCES "${RUNS_DIR}/*.cpp")
@@ -190,6 +229,7 @@ foreach(run_src IN LISTS RUN_SOURCES)
             md_particle_lib
             MPI::MPI_CXX
     )
+    target_link_directories("${exe_name}" PRIVATE /apps/software/2024a/software/CUDA/12.6.0/lib64)
 
     target_include_directories("${exe_name}"
         PRIVATE

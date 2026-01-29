@@ -25,15 +25,24 @@ module load NCCL/2.22.3-GCCcore-13.3.0-CUDA-12.6.0
 module load UCC-CUDA/1.3.0-GCCcore-13.3.0-CUDA-12.6.0
 module load miniconda/24.11.3
 module load git/2.45.1-GCCcore-13.3.0
-module load CMake/3.29.3-GCCcore-13.3.0
+module load CMake/3.31.8-GCCcore-13.3.0
 module load nlohmann_json/3.11.3-GCCcore-13.3.0
 
 if ! command -v conda >/dev/null 2>&1; then
     echo "[ERROR] conda not available after loading miniconda module." >&2
     exit 1
 fi
+# binutils activate script references unset tool vars; relax nounset briefly.
+set +u
 eval "$(conda shell.bash hook)"
 conda activate py3
+set -u
+
+# Conda drops its CUDA shims ahead of the toolchain on LD_LIBRARY_PATH,
+# which can make the runtime pick libcudart/libcusolver 12.9 from conda
+# instead of the 12.6 toolchain used to build the binary. Prefer the
+# module CUDA libs explicitly to avoid mixed-version crashes.
+export LD_LIBRARY_PATH="/apps/software/2024a/software/CUDA/12.6.0/lib64:/apps/software/2024a/software/CUDA/12.6.0/lib:${LD_LIBRARY_PATH:-}"
 
 CONFIG_PATH="${1:-tests/run_test/config.json}"
 BINARY="${2:-build/run_test_run_test}"

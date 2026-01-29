@@ -10,7 +10,7 @@ module load UCX-CUDA/1.16.0-GCCcore-13.3.0-CUDA-12.6.0
 module load NCCL/2.22.3-GCCcore-13.3.0-CUDA-12.6.0
 module load UCC-CUDA/1.3.0-GCCcore-13.3.0-CUDA-12.6.0
 module load git/2.45.1-GCCcore-13.3.0
-module load CMake/3.29.3-GCCcore-13.3.0
+module load CMake/3.31.8-GCCcore-13.3.0
 module load nlohmann_json/3.11.3-GCCcore-13.3.0
 module load poetry
 

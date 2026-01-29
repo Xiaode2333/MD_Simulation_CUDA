@@ -61,6 +61,8 @@ public:
     void save_env(const std::string &filename, const int step);
 
     void plot_particles(const std::string &filename, const std::string &csv_path);
+    // After sample_collect, fetch host-side particle frame (rank 0 only).
+    void get_host_particles(std::vector<Particle> &out) const;
 
     double cal_total_K();
     double cal_total_U();

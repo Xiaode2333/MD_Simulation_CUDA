@@ -2041,6 +2041,14 @@ void MDSimulation::sample_collect() {
     CUDA_CHECK(cudaDeviceSynchronize());
 }
 
+void MDSimulation::get_host_particles(std::vector<Particle> &out) const {
+    if (cfg_manager.config.rank_idx == 0) {
+        out = h_particles;
+    } else {
+        out.clear();
+    }
+}
+
 void _build_interface_coords(const std::vector<Particle> &h_particles,
                                                          double Lx, double Ly,
                                                          const std::vector<double> &interfaces,
