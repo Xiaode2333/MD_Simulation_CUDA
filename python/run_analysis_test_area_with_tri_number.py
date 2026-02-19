@@ -84,10 +84,20 @@ def main() -> None:
         kernel_name="python3",
         resources={"metadata": {"path": str(input_nb.parent.parent)}},  # repo root
     )
-    client.execute()
 
-    nbformat.write(nb, output_nb)
-    print(f"Executed notebook written to {output_nb}")
+    exec_error = None
+    try:
+        nb = client.execute()
+    except Exception as exc:  # Preserve the traceback after saving.
+        exec_error = exc
+    finally:
+        tmp_output = output_nb.with_suffix(output_nb.suffix + ".tmp")
+        nbformat.write(nb, tmp_output)
+        tmp_output.replace(output_nb)
+        print(f"Executed notebook written to {output_nb}")
+
+    if exec_error is not None:
+        raise exec_error
 
 
 if __name__ == "__main__":

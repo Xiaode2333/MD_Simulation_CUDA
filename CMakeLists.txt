@@ -1,5 +1,17 @@
 cmake_minimum_required(VERSION 3.18)
 
+# Ensure NVCC uses the same modern GCC toolchain as the C/C++ compilers.
+# This must be set before the CUDA language is enabled by the project() call.
+if(NOT DEFINED CMAKE_C_COMPILER)
+    set(CMAKE_C_COMPILER "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/bin/mpicc" CACHE FILEPATH "" FORCE)
+endif()
+if(NOT DEFINED CMAKE_CXX_COMPILER)
+    set(CMAKE_CXX_COMPILER "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/bin/mpicxx" CACHE FILEPATH "" FORCE)
+endif()
+if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER)
+    set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}" CACHE FILEPATH "Host compiler used by NVCC" FORCE)
+endif()
+
 project(CUDA2_MD LANGUAGES C CXX CUDA)
 
 if (NOT CMAKE_BUILD_TYPE)
@@ -29,7 +41,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER})
+# Some site toolchains leave CMake's feature tables empty, which breaks imported
+# targets that request cxx_std_Xx. Seed a minimal set so target_compile_features
+# works even when compiler detection is incomplete.
+if(NOT CMAKE_CXX_KNOWN_FEATURES)
+    set(CMAKE_CXX_KNOWN_FEATURES cxx_std_98 cxx_std_11 cxx_std_14 cxx_std_17 cxx_std_20 cxx_std_23)
+    set(CMAKE_CXX_COMPILE_FEATURES ${CMAKE_CXX_KNOWN_FEATURES})
+endif()
+if(NOT CMAKE_C_KNOWN_FEATURES)
+    set(CMAKE_C_KNOWN_FEATURES c_std_90 c_std_99 c_std_11 c_std_17 c_std_23)
+    set(CMAKE_C_COMPILE_FEATURES ${CMAKE_C_KNOWN_FEATURES})
+endif()
 # Disable linker dependency files (ld.bfd on this system does not support
 # --dependency-file), otherwise linking fails with "unrecognized option".
 set(CMAKE_LINK_DEPENDS_USE_LINKER FALSE)
@@ -37,6 +59,11 @@ set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING "Use shared CUDA runtime" FOR
 set(CMAKE_CUDA_SEPARABLE_COMPILATION OFF)
 set(GCC_LIB_PATH "/apps/software/2024a/software/GCCcore/13.3.0/lib64")
 set(CMAKE_CUDA_ARCHITECTURES 89)
+# Pin the CUDA toolkit used everywhere (CUDAToolkit targets and legacy FindCUDA
+# inside gDel2D) to the system installation instead of the conda shim toolchain.
+set(CUDA_TOOLKIT_ROOT_DIR "/apps/software/2024a/software/CUDA/12.6.0" CACHE PATH "" FORCE)
+set(CUDA_NVCC_EXECUTABLE "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc" CACHE FILEPATH "" FORCE)
+set(ENV{PATH} "${CUDA_TOOLKIT_ROOT_DIR}/bin:$ENV{PATH}")
 link_directories(/apps/software/2024a/software/CUDA/12.6.0/lib64)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L/apps/software/2024a/software/CUDA/12.6.0/lib64")
 
@@ -48,6 +75,16 @@ add_link_options("-Wl,-rpath,${CUDA_TOOLCHAIN_LIB}")
 list(APPEND CMAKE_BUILD_RPATH "${CUDA_TOOLCHAIN_LIB}")
 list(APPEND CMAKE_INSTALL_RPATH "${CUDA_TOOLCHAIN_LIB}")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+# Ensure the local vcpkg manifest install tree stays on CMAKE_PREFIX_PATH even
+# when users override it on the command line (needed for fmt, delaunator-cpp, etc.).
+if(NOT VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET "x64-linux")
+endif()
+set(_LOCAL_VCPKG_PREFIX "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
+if(EXISTS "${_LOCAL_VCPKG_PREFIX}")
+    list(PREPEND CMAKE_PREFIX_PATH "${_LOCAL_VCPKG_PREFIX}")
+endif()
 
 # ---- Core Packages ----
 find_package(CUDAToolkit REQUIRED)
