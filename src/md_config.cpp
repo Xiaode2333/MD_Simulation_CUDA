@@ -1,6 +1,8 @@
 // md_config.cpp
 #include "md_config.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <type_traits>
 
@@ -19,6 +21,23 @@ template <>
 bool parse_scalar<std::string>(const std::string &text, std::string &out) {
     out = text;
     return true;
+}
+
+template <> bool parse_scalar<bool>(const std::string &text, bool &out) {
+    std::string lowered = text;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+        lowered == "on") {
+        out = true;
+        return true;
+    }
+    if (lowered == "0" || lowered == "false" || lowered == "no" ||
+        lowered == "off") {
+        out = false;
+        return true;
+    }
+    return false;
 }
 
 void load_from_json_object(const json &j, MDConfig &cfg) {
@@ -65,6 +84,35 @@ void load_from_json_object(const json &j, MDConfig &cfg) {
     cfg.v0 = j.value("v0", defaults.v0);
     cfg.D_r = j.value("D_r", defaults.D_r);
     cfg.D_theta = j.value("D_theta", defaults.D_theta);
+
+    // Periodic-box NPH barostat controls
+    cfg.barostat_mass = j.value("barostat_mass", defaults.barostat_mass);
+    cfg.barostat_area_rate_init =
+            j.value("barostat_area_rate_init", defaults.barostat_area_rate_init);
+    cfg.barostat_height_min_ratio = j.value(
+            "barostat_height_min_ratio", defaults.barostat_height_min_ratio);
+    cfg.barostat_height_max_ratio = j.value(
+            "barostat_height_max_ratio", defaults.barostat_height_max_ratio);
+    cfg.pressure_target_mode =
+            j.value("pressure_target_mode", defaults.pressure_target_mode);
+    cfg.P_target = j.value("P_target", defaults.P_target);
+    cfg.pressure_target_auto_steps =
+            j.value("pressure_target_auto_steps", defaults.pressure_target_auto_steps);
+    cfg.pressure_eval_interval_steps =
+            j.value("pressure_eval_interval_steps",
+                    defaults.pressure_eval_interval_steps);
+    cfg.pressure_window_samples =
+            j.value("pressure_window_samples", defaults.pressure_window_samples);
+    cfg.pressure_tolerance_rel =
+            j.value("pressure_tolerance_rel", defaults.pressure_tolerance_rel);
+    cfg.pressure_stable_required_windows = j.value(
+            "pressure_stable_required_windows",
+            defaults.pressure_stable_required_windows);
+    cfg.nph_warmup_min_steps =
+            j.value("nph_warmup_min_steps", defaults.nph_warmup_min_steps);
+    cfg.nph_warmup_max_steps =
+            j.value("nph_warmup_max_steps", defaults.nph_warmup_max_steps);
+    cfg.nph_steps = j.value("nph_steps", defaults.nph_steps);
 
     // This rank params (optional in JSON, so they default to struct values)
     cfg.rank_idx = j.value("rank_idx", defaults.rank_idx);
@@ -117,6 +165,22 @@ void store_to_json_object(json &j, const MDConfig &cfg) {
     j["v0"] = cfg.v0;
     j["D_r"] = cfg.D_r;
     j["D_theta"] = cfg.D_theta;
+
+    // Periodic-box NPH barostat controls
+    j["barostat_mass"] = cfg.barostat_mass;
+    j["barostat_area_rate_init"] = cfg.barostat_area_rate_init;
+    j["barostat_height_min_ratio"] = cfg.barostat_height_min_ratio;
+    j["barostat_height_max_ratio"] = cfg.barostat_height_max_ratio;
+    j["pressure_target_mode"] = cfg.pressure_target_mode;
+    j["P_target"] = cfg.P_target;
+    j["pressure_target_auto_steps"] = cfg.pressure_target_auto_steps;
+    j["pressure_eval_interval_steps"] = cfg.pressure_eval_interval_steps;
+    j["pressure_window_samples"] = cfg.pressure_window_samples;
+    j["pressure_tolerance_rel"] = cfg.pressure_tolerance_rel;
+    j["pressure_stable_required_windows"] = cfg.pressure_stable_required_windows;
+    j["nph_warmup_min_steps"] = cfg.nph_warmup_min_steps;
+    j["nph_warmup_max_steps"] = cfg.nph_warmup_max_steps;
+    j["nph_steps"] = cfg.nph_steps;
 
     // This rank params
     j["rank_idx"] = cfg.rank_idx;
@@ -191,6 +255,30 @@ void MDConfigManager::print_config() {
                          config.n_local, config.n_halo_left, config.n_halo_right,
                          config.n_cap, config.halo_left_cap, config.halo_right_cap,
                          config.left_rank, config.right_rank, config.x_min, config.x_max);
+
+    fmt::print("NPH barostat controls:\n"
+               "  barostat_mass: {}\n"
+               "  barostat_area_rate_init: {}\n"
+               "  barostat_height_min_ratio: {}\n"
+               "  barostat_height_max_ratio: {}\n"
+               "  pressure_target_mode: {}\n"
+               "  P_target: {}\n"
+               "  pressure_target_auto_steps: {}\n"
+               "  pressure_eval_interval_steps: {}\n"
+               "  pressure_window_samples: {}\n"
+               "  pressure_tolerance_rel: {}\n"
+               "  pressure_stable_required_windows: {}\n"
+               "  nph_warmup_min_steps: {}\n"
+               "  nph_warmup_max_steps: {}\n"
+               "  nph_steps: {}\n",
+               config.barostat_mass, config.barostat_area_rate_init,
+               config.barostat_height_min_ratio, config.barostat_height_max_ratio,
+               config.pressure_target_mode, config.P_target,
+               config.pressure_target_auto_steps, config.pressure_eval_interval_steps,
+               config.pressure_window_samples, config.pressure_tolerance_rel,
+               config.pressure_stable_required_windows,
+               config.nph_warmup_min_steps, config.nph_warmup_max_steps,
+               config.nph_steps);
 }
 
 // load MDConfig from a JSON file
@@ -329,6 +417,36 @@ bool MDConfigManager::apply_override(const std::string &key,
         return assign_numeric(config.D_r);
     if (key == "D_theta")
         return assign_numeric(config.D_theta);
+
+    // Periodic-box NPH barostat controls
+    if (key == "barostat_mass")
+        return assign_numeric(config.barostat_mass);
+    if (key == "barostat_area_rate_init")
+        return assign_numeric(config.barostat_area_rate_init);
+    if (key == "barostat_height_min_ratio")
+        return assign_numeric(config.barostat_height_min_ratio);
+    if (key == "barostat_height_max_ratio")
+        return assign_numeric(config.barostat_height_max_ratio);
+    if (key == "pressure_target_mode")
+        return assign_string(config.pressure_target_mode);
+    if (key == "P_target")
+        return assign_numeric(config.P_target);
+    if (key == "pressure_target_auto_steps")
+        return assign_numeric(config.pressure_target_auto_steps);
+    if (key == "pressure_eval_interval_steps")
+        return assign_numeric(config.pressure_eval_interval_steps);
+    if (key == "pressure_window_samples")
+        return assign_numeric(config.pressure_window_samples);
+    if (key == "pressure_tolerance_rel")
+        return assign_numeric(config.pressure_tolerance_rel);
+    if (key == "pressure_stable_required_windows")
+        return assign_numeric(config.pressure_stable_required_windows);
+    if (key == "nph_warmup_min_steps")
+        return assign_numeric(config.nph_warmup_min_steps);
+    if (key == "nph_warmup_max_steps")
+        return assign_numeric(config.nph_warmup_max_steps);
+    if (key == "nph_steps")
+        return assign_numeric(config.nph_steps);
 
     return false;
 }

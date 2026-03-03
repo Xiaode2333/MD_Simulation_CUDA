@@ -154,7 +154,8 @@ __global__ void li_force_kernel(Particle *particles, Particle *halo_left,
                                                                 double sigma_AA, double sigma_BB,
                                                                 double sigma_AB, double epsilon_AA,
                                                                 double epsilon_BB, double epsilon_AB,
-                                                                double cutoff, double mass_0, double mass_1) {
+                                                                double cutoff, double mass_0,
+                                                                double mass_1, int periodic_y) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx >= n_local) {
@@ -209,7 +210,9 @@ __global__ void li_force_kernel(Particle *particles, Particle *halo_left,
 
         // MIC in float
         dx_f = dx_f - Lx_f * roundf(dx_f / Lx_f);
-        dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+        if (periodic_y) {
+            dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+        }
 
         // Choose LJ parameters in float
         float sigma_f = 0.0f;
@@ -266,7 +269,8 @@ __global__ void cal_partial_U_lambda_kernel(
         const Particle *__restrict__ halo_right, int n_local, int n_left,
         int n_right, double Lx, double Ly, double sigma_AA, double sigma_BB,
         double sigma_AB, double epsilon_AA, double epsilon_BB, double epsilon_AB,
-        double cutoff, double epsilon_lambda, double *__restrict__ partial_sums) {
+        double cutoff, double epsilon_lambda, double *__restrict__ partial_sums,
+        int periodic_y) {
     extern __shared__ double sdata[];
     const int tid = threadIdx.x;
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -310,7 +314,9 @@ __global__ void cal_partial_U_lambda_kernel(
             float dy_f = static_cast<float>(ri_d.y - rj_d.y);
 
             dx_f = dx_f - Lx_f * roundf(dx_f / Lx_f);
-            dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+            if (periodic_y) {
+                dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+            }
 
             float sigma_f = 0.0f;
             float epsilon_f = 0.0f;
@@ -385,6 +391,37 @@ __global__ void step_half_vv_kernel(Particle *particles, int n_local, double dt,
     particles[idx].pos.y += dt * particles[idx].vel.y;
     particles[idx].pos.x = pbc_wrap_hd(particles[idx].pos.x, Lx);
     particles[idx].pos.y = pbc_wrap_hd(particles[idx].pos.y, Ly);
+}
+
+__global__ void step_half_nph_velocity_kernel(Particle *particles, int n_local,
+                                              double dt) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_local) {
+        return;
+    }
+
+    particles[idx].vel.x += 0.5 * dt * particles[idx].acc.x;
+    particles[idx].vel.y += 0.5 * dt * particles[idx].acc.y;
+}
+
+__global__ void step_nph_scale_and_drift_kernel(Particle *particles, int n_local,
+                                                double dt, double linear_scale,
+                                                double velocity_scale,
+                                                double Lx_new, double Ly_new) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_local) {
+        return;
+    }
+
+    Particle &p = particles[idx];
+    p.vel.x *= velocity_scale;
+    p.vel.y *= velocity_scale;
+
+    p.pos.x = linear_scale * p.pos.x + dt * p.vel.x;
+    p.pos.y = linear_scale * p.pos.y + dt * p.vel.y;
+
+    p.pos.x = pbc_wrap_hd(p.pos.x, Lx_new);
+    p.pos.y = pbc_wrap_hd(p.pos.y, Ly_new);
 }
 
 // 2nd half kick. From r^{n+1}, v^{n+1/2}, a^{n+1} to r^{n+1}, v^{n+1}, a^{n+1};
@@ -480,6 +517,118 @@ __global__ void cal_local_K_kernel(const Particle *__restrict__ particles,
     }
 }
 
+__global__ void cal_local_pressure_scalar_kernel(
+        const Particle *__restrict__ particles,
+        const Particle *__restrict__ halo_left,
+        const Particle *__restrict__ halo_right, int n_local, int n_left,
+        int n_right, double Lx, double Ly, double mass_A, double mass_B,
+        double sigma_AA, double sigma_BB, double sigma_AB, double epsilon_AA,
+        double epsilon_BB, double epsilon_AB, double cutoff,
+        double *__restrict__ partial_sums, int periodic_y) {
+    extern __shared__ double sdata[];
+    const int tid = threadIdx.x;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    double local_sum = 0.0;
+
+    if (idx < n_local) {
+        const int n_total = n_local + n_left + n_right;
+        const int offset_left = n_local;
+        const int offset_right = n_local + n_left;
+
+        const Particle pi = particles[idx];
+        const double mass_i = (pi.type == 0 ? mass_A : mass_B);
+        const double vx = pi.vel.x;
+        const double vy = pi.vel.y;
+        local_sum += mass_i * (vx * vx + vy * vy);
+
+        const double2 ri_d = pi.pos;
+        const int type_i = pi.type;
+
+        const float Lx_f = static_cast<float>(Lx);
+        const float Ly_f = static_cast<float>(Ly);
+        const float cutoff_f = static_cast<float>(cutoff);
+
+        for (int j = 0; j < n_total; ++j) {
+            if (j == idx) {
+                continue;
+            }
+
+            double2 rj_d;
+            int type_j;
+
+            if (j < n_local) {
+                rj_d = particles[j].pos;
+                type_j = particles[j].type;
+            } else if (j < offset_right) {
+                const int halo_idx = j - offset_left;
+                rj_d = halo_left[halo_idx].pos;
+                type_j = halo_left[halo_idx].type;
+            } else {
+                const int halo_idx = j - offset_right;
+                rj_d = halo_right[halo_idx].pos;
+                type_j = halo_right[halo_idx].type;
+            }
+
+            float dx_f = static_cast<float>(ri_d.x - rj_d.x);
+            float dy_f = static_cast<float>(ri_d.y - rj_d.y);
+
+            dx_f = dx_f - Lx_f * roundf(dx_f / Lx_f);
+            if (periodic_y) {
+                dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+            }
+
+            float sigma_f = 0.0f;
+            float epsilon_f = 0.0f;
+            if (type_i == 0 && type_j == 0) {
+                sigma_f = static_cast<float>(sigma_AA);
+                epsilon_f = static_cast<float>(epsilon_AA);
+            } else if (type_i == 1 && type_j == 1) {
+                sigma_f = static_cast<float>(sigma_BB);
+                epsilon_f = static_cast<float>(epsilon_BB);
+            } else {
+                sigma_f = static_cast<float>(sigma_AB);
+                epsilon_f = static_cast<float>(epsilon_AB);
+            }
+
+            const float rc_f = cutoff_f * sigma_f;
+            const float rc_sq_f = rc_f * rc_f;
+            const float dr_sq_f = dx_f * dx_f + dy_f * dy_f;
+
+            if (dr_sq_f > 0.0f && dr_sq_f < rc_sq_f) {
+                const float sigma_sq_f = sigma_f * sigma_f;
+                const float r2_inv_f = 1.0f / dr_sq_f;
+                const float sr2_f = sigma_sq_f * r2_inv_f;
+                const float sr6_f = sr2_f * sr2_f * sr2_f;
+                const float sr12_f = sr6_f * sr6_f;
+                const float tmp_f =
+                        24.0f * epsilon_f * (2.0f * sr12_f - sr6_f) * r2_inv_f;
+
+                const double dx = static_cast<double>(dx_f);
+                const double dy = static_cast<double>(dy_f);
+                const double Fx = static_cast<double>(tmp_f * dx_f);
+                const double Fy = static_cast<double>(tmp_f * dy_f);
+
+                local_sum += 0.5 * (dx * Fx + dy * Fy);
+            }
+        }
+    }
+
+    sdata[tid] = local_sum;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        partial_sums[blockIdx.x] = sdata[0];
+    }
+}
+
 __global__ void cal_local_U_kernel(const Particle *__restrict__ particles,
                                                                      const Particle *__restrict__ halo_left,
                                                                      const Particle *__restrict__ halo_right,
@@ -488,7 +637,8 @@ __global__ void cal_local_U_kernel(const Particle *__restrict__ particles,
                                                                      double sigma_BB, double sigma_AB,
                                                                      double epsilon_AA, double epsilon_BB,
                                                                      double epsilon_AB, double cutoff,
-                                                                     double *__restrict__ partial_sums) {
+                                                                     double *__restrict__ partial_sums,
+                                                                     int periodic_y) {
     extern __shared__ double sdata[];
     const int tid = threadIdx.x;
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -546,7 +696,9 @@ __global__ void cal_local_U_kernel(const Particle *__restrict__ particles,
 
             // MIC in float
             dx_f = dx_f - Lx_f * roundf(dx_f / Lx_f);
-            dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+            if (periodic_y) {
+                dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+            }
 
             // LJ parameters in float
             float sigma_f = 0.0f;
@@ -661,7 +813,7 @@ __global__ void local_pressure_tensor_profile_kernel(
         double sigma_AA, double sigma_BB, double sigma_AB, double epsilon_AA,
         double epsilon_BB, double epsilon_AB, double cutoff, int n_bins_local,
         double *__restrict__ P_xx, double *__restrict__ P_yy,
-        double *__restrict__ P_xy) {
+        double *__restrict__ P_xy, int periodic_y) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_local || n_bins_local <= 0) {
         return;
@@ -680,7 +832,14 @@ __global__ void local_pressure_tensor_profile_kernel(
     const double mass_i = (type_i == 0 ? mass_A : mass_B);
 
     // Kinetic contribution: m v_α v_β assigned to bin of y_i
-    double y_i = pbc_wrap_hd(ri.y, Ly);
+    double y_i = periodic_y ? pbc_wrap_hd(ri.y, Ly) : ri.y;
+    if (!periodic_y) {
+        if (y_i < 0.0) {
+            y_i = 0.0;
+        } else if (y_i >= Ly && Ly > 0.0) {
+            y_i = Ly * (1.0 - 1e-12);
+        }
+    }
     double pos_norm = (Ly > 0.0) ? (y_i / Ly) : 0.0;
     int bin = static_cast<int>(pos_norm * static_cast<double>(n_bins_local));
     if (bin < 0) {
@@ -727,7 +886,9 @@ __global__ void local_pressure_tensor_profile_kernel(
         float dy_f = static_cast<float>(ri.y - rj.y);
 
         dx_f = dx_f - Lx_f * roundf(dx_f / Lx_f);
-        dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+        if (periodic_y) {
+            dy_f = dy_f - Ly_f * roundf(dy_f / Ly_f);
+        }
 
         float sigma_f = 0.0f;
         float epsilon_f = 0.0f;
@@ -765,7 +926,15 @@ __global__ void local_pressure_tensor_profile_kernel(
 
             // Midpoint along minimum-image segment in y
             double y_mid = ri.y - 0.5 * dy;
-            y_mid = pbc_wrap_hd(y_mid, Ly);
+            if (periodic_y) {
+                y_mid = pbc_wrap_hd(y_mid, Ly);
+            } else {
+                if (y_mid < 0.0) {
+                    y_mid = 0.0;
+                } else if (y_mid >= Ly && Ly > 0.0) {
+                    y_mid = Ly * (1.0 - 1e-12);
+                }
+            }
 
             double pos_norm_mid = (Ly > 0.0) ? (y_mid / Ly) : 0.0;
             int bin_pair =

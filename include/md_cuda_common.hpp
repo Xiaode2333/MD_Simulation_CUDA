@@ -63,7 +63,8 @@ __global__ void li_force_kernel(Particle *particles, Particle *halo_left,
                                 double sigma_AA, double sigma_BB,
                                 double sigma_AB, double epsilon_AA,
                                 double epsilon_BB, double epsilon_AB,
-                                double cutoff, double mass_0, double mass_1);
+                                double cutoff, double mass_0, double mass_1,
+                                int periodic_y);
 
 // Compute per-block partial sums of dU/dlambda on the device.
 // For each interacting pair with force F = (Fx, Fy) and separation dr = (dx,
@@ -75,12 +76,26 @@ __global__ void cal_partial_U_lambda_kernel(
         const Particle *__restrict__ halo_right, int n_local, int n_left,
         int n_right, double Lx, double Ly, double sigma_AA, double sigma_BB,
         double sigma_AB, double epsilon_AA, double epsilon_BB, double epsilon_AB,
-        double cutoff, double epsilon_lambda, double *__restrict__ partial_sums);
+        double cutoff, double epsilon_lambda, double *__restrict__ partial_sums,
+        int periodic_y);
 
 // Verlocity-Verlot half kick
 // from r^{n}, v^{n}, a^{n} to r^{n+1}, v^{n+1/2}, a^{n};
 __global__ void step_half_vv_kernel(Particle *particles, int n_local, double dt,
                                     double Lx, double Ly);
+
+// NPH half-kick on physical velocities. This corresponds to a half-step update
+// of the scaled momentum in the extended-system formulation.
+__global__ void step_half_nph_velocity_kernel(Particle *particles, int n_local,
+                                              double dt);
+
+// Isotropic 2D barostat drift: scale the box linearly by `linear_scale`,
+// convert velocities to the new box representation with `velocity_scale`, then
+// advance positions for a full step and wrap them into the updated box.
+__global__ void step_nph_scale_and_drift_kernel(Particle *particles, int n_local,
+                                                double dt, double linear_scale,
+                                                double velocity_scale,
+                                                double Lx_new, double Ly_new);
 
 // 2nd half kick. From r^{n+1}, v^{n+1/2}, a^{n+1} to r^{n+1}, v^{n+1}, a^{n+1};
 __global__ void step_2nd_half_vv_kernel(Particle *particles, int n_local,
@@ -97,6 +112,19 @@ __global__ void cal_local_K_kernel(const Particle *__restrict__ particles,
                                    int n_local, double mass_A, double mass_B,
                                    double *__restrict__ partial_sums);
 
+// Compute per-block partial sums of the 2D scalar virial pressure numerator:
+//   sum_i m_i |v_i|^2 + sum_{i<j} r_ij · F_ij
+// where the pair term uses the same minimum-image convention as the force
+// kernel. Divide the global sum by (2 * A) on the host to obtain pressure.
+__global__ void cal_local_pressure_scalar_kernel(
+        const Particle *__restrict__ particles,
+        const Particle *__restrict__ halo_left,
+        const Particle *__restrict__ halo_right, int n_local, int n_left,
+        int n_right, double Lx, double Ly, double mass_A, double mass_B,
+        double sigma_AA, double sigma_BB, double sigma_AB, double epsilon_AA,
+        double epsilon_BB, double epsilon_AB, double cutoff,
+        double *__restrict__ partial_sums, int periodic_y);
+
 __global__ void cal_local_U_kernel(const Particle *__restrict__ particles,
                                    const Particle *__restrict__ halo_left,
                                    const Particle *__restrict__ halo_right,
@@ -105,7 +133,8 @@ __global__ void cal_local_U_kernel(const Particle *__restrict__ particles,
                                    double sigma_BB, double sigma_AB,
                                    double epsilon_AA, double epsilon_BB,
                                    double epsilon_AB, double cutoff,
-                                   double *__restrict__ partial_sums);
+                                   double *__restrict__ partial_sums,
+                                   int periodic_y);
 
 __global__ void
 local_density_profile_kernel(const Particle *__restrict__ particles,
@@ -127,7 +156,7 @@ __global__ void local_pressure_tensor_profile_kernel(
         double sigma_AA, double sigma_BB, double sigma_AB, double epsilon_AA,
         double epsilon_BB, double epsilon_AB, double cutoff, int n_bins_local,
         double *__restrict__ P_xx, double *__restrict__ P_yy,
-        double *__restrict__ P_xy);
+        double *__restrict__ P_xy, int periodic_y);
 
 // Compute Hessian blocks of Lennard–Jones potential for two disjoint
 // subsystems. Coordinates are ordered (x0, y0, x1, y1, ...).

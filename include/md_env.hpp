@@ -79,7 +79,11 @@ public:
 
     void step_single_NVE();
     void step_single_nose_hoover(bool do_middle_wrap = false);
+    void step_single_NPH(double pressure_ext);
     void step_single_ABP(bool do_middle_wrap = false); // ABP overdamped dynamics with self-propulsion
+    double cal_instant_pressure();
+    double get_last_instant_pressure() const { return last_instant_pressure; }
+    double get_nph_area_rate() const;
 
     bool check_eqlibrium(double sensitivity);
 
@@ -201,6 +205,11 @@ private:
     static constexpr int kBaseRequiredPasses = 3;
     static constexpr double kBasePValue = 0.2;
 
+    double last_instant_pressure = 0.0;
+    double nph_area_momentum = 0.0;
+    double nph_aspect_ratio = 1.0;
+    bool nph_state_initialized = false;
+
     void broadcast_params();
     void allocate_memory();
     void init_particles(); // Only update h_particles on rank 0
@@ -212,6 +221,9 @@ private:
     void update_d_particles(); // use only d_particles to update particles through
                                                          // particle exchange between ranks
     void cal_forces();         // update force and store into d_particles
+    double cal_total_scalar_pressure(int periodic_y);
+    void set_box_dimensions(double Lx_new, double Ly_new);
+    void init_nph_state_if_needed();
     double compute_U_energy_local();
     std::vector<std::vector<double>>
     compute_interface_paths(int n_grid_y, double smoothing_sigma);

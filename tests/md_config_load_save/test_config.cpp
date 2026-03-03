@@ -56,48 +56,45 @@ int main(){
     double x_min = box_w_global/world_size*world_rank;
     double x_max = box_w_global/world_size*(world_rank + 1);
 
-    MDConfig cfg = {
-        n_particles_global,
-        n_particles_type0,
-        box_w_global,
-        box_h_global,
-        T_init, 
-        T_target,
-        SIGMA_AA, 
-        SIGMA_BB, 
-        SIGMA_AB,
-        EPSILON_AA, 
-        EPSILON_BB, 
-        EPSILON_AB,
-        MASS_A,
-        MASS_B,
-        devide_p,
-        dt,
-        Q,
-        save_dt_interval,
-        cutoff,
-        run_name,
-        load_name, // if needed to load from file
-        THREADS_PER_BLOCK,
-        rank_size,
-
-        mu,
-        v0,
-        D_r,
-        D_theta,
-
-        rank_idx,
-        n_local,
-        n_halo_left,
-        n_halo_right,
-        n_cap, //buffer capacity
-        halo_left_cap,
-        halo_right_cap,
-        left_rank,
-        right_rank,
-        x_min,
-        x_max,
-    };
+    MDConfig cfg{};
+    cfg.n_particles_global = n_particles_global;
+    cfg.n_particles_type0 = n_particles_type0;
+    cfg.box_w_global = box_w_global;
+    cfg.box_h_global = box_h_global;
+    cfg.T_init = T_init;
+    cfg.T_target = T_target;
+    cfg.SIGMA_AA = SIGMA_AA;
+    cfg.SIGMA_BB = SIGMA_BB;
+    cfg.SIGMA_AB = SIGMA_AB;
+    cfg.EPSILON_AA = EPSILON_AA;
+    cfg.EPSILON_BB = EPSILON_BB;
+    cfg.EPSILON_AB = EPSILON_AB;
+    cfg.MASS_A = MASS_A;
+    cfg.MASS_B = MASS_B;
+    cfg.devide_p = devide_p;
+    cfg.dt = dt;
+    cfg.Q = Q;
+    cfg.save_dt_interval = save_dt_interval;
+    cfg.cutoff = cutoff;
+    cfg.run_name = run_name;
+    cfg.load_name = load_name;
+    cfg.THREADS_PER_BLOCK = THREADS_PER_BLOCK;
+    cfg.rank_size = rank_size;
+    cfg.mu = mu;
+    cfg.v0 = v0;
+    cfg.D_r = D_r;
+    cfg.D_theta = D_theta;
+    cfg.rank_idx = rank_idx;
+    cfg.n_local = n_local;
+    cfg.n_halo_left = n_halo_left;
+    cfg.n_halo_right = n_halo_right;
+    cfg.n_cap = n_cap;
+    cfg.halo_left_cap = halo_left_cap;
+    cfg.halo_right_cap = halo_right_cap;
+    cfg.left_rank = left_rank;
+    cfg.right_rank = right_rank;
+    cfg.x_min = x_min;
+    cfg.x_max = x_max;
     MDConfigManager cfg_mng(cfg);
     cfg_mng.config_to_json("./tests/md_config_load_save/test_config_output.json");
     MDConfigManager loaded_cfg_mng = MDConfigManager::config_from_json("./tests/md_config_load_save/test_config_output.json"); 

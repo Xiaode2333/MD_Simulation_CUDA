@@ -1526,6 +1526,7 @@ void MDSimulation::cal_forces() {
     }
 
     int blocks = (n_local + threads - 1) / threads;
+    const int periodic_y = 1;
     li_force_kernel<<<blocks, threads>>>(
             thrust::raw_pointer_cast(d_particles.data()),
             thrust::raw_pointer_cast(d_particles_halo_left.data()),
@@ -1535,7 +1536,7 @@ void MDSimulation::cal_forces() {
             cfg_manager.config.SIGMA_AB, cfg_manager.config.EPSILON_AA,
             cfg_manager.config.EPSILON_BB, cfg_manager.config.EPSILON_AB,
             cfg_manager.config.cutoff, cfg_manager.config.MASS_A,
-            cfg_manager.config.MASS_B);
+            cfg_manager.config.MASS_B, periodic_y);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -1690,6 +1691,180 @@ void MDSimulation::step_single_nose_hoover(bool do_middle_wrap) {
     t += dt;
 }
 
+double MDSimulation::get_nph_area_rate() const {
+    const double W = std::max(cfg_manager.config.barostat_mass, 1e-12);
+    return nph_area_momentum / W;
+}
+
+void MDSimulation::set_box_dimensions(double Lx_new, double Ly_new) {
+    if (Lx_new <= 0.0 || Ly_new <= 0.0) {
+        if (cfg_manager.config.rank_idx == 0) {
+            fmt::print(stderr,
+                       "[set_box_dimensions] invalid box sizes Lx={}, Ly={}\n",
+                       Lx_new, Ly_new);
+        }
+        MPI_Abort(comm, 1);
+    }
+
+    cfg_manager.config.box_w_global = Lx_new;
+    cfg_manager.config.box_h_global = Ly_new;
+
+    const int rank_size = std::max(1, cfg_manager.config.rank_size);
+    const int rank_idx = cfg_manager.config.rank_idx;
+    const double dx = Lx_new / static_cast<double>(rank_size);
+    cfg_manager.config.x_min = dx * static_cast<double>(rank_idx);
+    cfg_manager.config.x_max = dx * static_cast<double>(rank_idx + 1);
+    cfg_manager.config.left_rank = (rank_idx + rank_size - 1) % rank_size;
+    cfg_manager.config.right_rank = (rank_idx + 1) % rank_size;
+}
+
+void MDSimulation::init_nph_state_if_needed() {
+    if (nph_state_initialized) {
+        return;
+    }
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly = cfg_manager.config.box_h_global;
+    if (Lx <= 0.0 || Ly <= 0.0) {
+        if (cfg_manager.config.rank_idx == 0) {
+            fmt::print(stderr,
+                       "[init_nph_state_if_needed] invalid initial box Lx={}, Ly={}\n",
+                       Lx, Ly);
+        }
+        MPI_Abort(comm, 1);
+    }
+
+    nph_aspect_ratio = Lx / Ly;
+    nph_area_momentum =
+            std::max(cfg_manager.config.barostat_mass, 1e-12) *
+            cfg_manager.config.barostat_area_rate_init;
+    nph_state_initialized = true;
+}
+
+void MDSimulation::step_single_NPH(double pressure_ext) {
+    init_nph_state_if_needed();
+
+    const double dt = cfg_manager.config.dt;
+    const double W = std::max(cfg_manager.config.barostat_mass, 1e-12);
+
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
+    int n_local = cfg_manager.config.n_local;
+    const int n_cap = cfg_manager.config.n_cap;
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                   "[step_single_NPH] rank {} n_local={} exceeds n_cap={} before step.\n",
+                   cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
+
+    const double Lx_old = cfg_manager.config.box_w_global;
+    const double Ly_old = cfg_manager.config.box_h_global;
+    const double area_old = Lx_old * Ly_old;
+    if (area_old <= 0.0) {
+        fmt::print(stderr, "[step_single_NPH] invalid area={}\n", area_old);
+        MPI_Abort(comm, 1);
+    }
+
+    const double pressure_old = cal_total_scalar_pressure(/*periodic_y=*/1);
+
+    if (n_local > 0) {
+        const int blocks = (n_local + threads - 1) / threads;
+        step_half_nph_velocity_kernel<<<blocks, threads>>>(
+                thrust::raw_pointer_cast(d_particles.data()), n_local, dt);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    nph_area_momentum += 0.5 * dt * (pressure_old - pressure_ext);
+
+    double area_new = area_old + dt * (nph_area_momentum / W);
+    if (!(area_new > 0.0) || !std::isfinite(area_new)) {
+        fmt::print(stderr,
+                   "[step_single_NPH] invalid proposed area={} from area_old={} p_A={}\n",
+                   area_new, area_old, nph_area_momentum);
+        MPI_Abort(comm, 1);
+    }
+
+    if (!(nph_aspect_ratio > 0.0) || !std::isfinite(nph_aspect_ratio)) {
+        nph_aspect_ratio = Lx_old / Ly_old;
+    }
+
+    double Ly_new = std::sqrt(area_new / nph_aspect_ratio);
+    double Lx_new = nph_aspect_ratio * Ly_new;
+
+    const double Ly_floor =
+            std::max(1e-12, cfg_manager.config.barostat_height_min_ratio * Ly0);
+    const double Ly_ceiling = std::max(
+            Ly_floor, cfg_manager.config.barostat_height_max_ratio * Ly0);
+    bool clamped_to_bounds = false;
+
+    if (Ly_new < Ly_floor) {
+        Ly_new = Ly_floor;
+        Lx_new = nph_aspect_ratio * Ly_new;
+        area_new = Lx_new * Ly_new;
+        clamped_to_bounds = true;
+    } else if (Ly_new > Ly_ceiling) {
+        Ly_new = Ly_ceiling;
+        Lx_new = nph_aspect_ratio * Ly_new;
+        area_new = Lx_new * Ly_new;
+        clamped_to_bounds = true;
+    }
+
+    const double linear_scale = std::sqrt(area_new / area_old);
+    const double velocity_scale = 1.0 / linear_scale;
+
+    if (n_local > 0) {
+        const int blocks = (n_local + threads - 1) / threads;
+        step_nph_scale_and_drift_kernel<<<blocks, threads>>>(
+                thrust::raw_pointer_cast(d_particles.data()), n_local, dt,
+                linear_scale, velocity_scale, Lx_new, Ly_new);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    set_box_dimensions(Lx_new, Ly_new);
+
+    update_d_particles();
+    update_halo();
+
+    n_local = cfg_manager.config.n_local;
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                   "[step_single_NPH] rank {} n_local={} exceeds n_cap={} after exchange.\n",
+                   cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
+
+    cal_forces();
+
+    const double pressure_new = cal_total_scalar_pressure(/*periodic_y=*/1);
+
+    if (n_local > 0) {
+        const int blocks = (n_local + threads - 1) / threads;
+        step_2nd_half_vv_kernel<<<blocks, threads>>>(
+                thrust::raw_pointer_cast(d_particles.data()), n_local, dt);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    nph_area_momentum += 0.5 * dt * (pressure_new - pressure_ext);
+    if (clamped_to_bounds) {
+        if (cfg_manager.config.box_h_global <= Ly_floor && nph_area_momentum < 0.0) {
+            nph_area_momentum = 0.0;
+        }
+        if (cfg_manager.config.box_h_global >= Ly_ceiling && nph_area_momentum > 0.0) {
+            nph_area_momentum = 0.0;
+        }
+    }
+
+    last_instant_pressure = pressure_new;
+    t += dt;
+}
+
 // ABP (Active Brownian Particle) overdamped integration step
 // Implements Euler-Maruyama for: θ^{n+1} = θ^n + √(2·D_θ·Δt)·ξ
 //                                 v = μ·F + v0·û + √(2·D_r·Δt)·η
@@ -1811,6 +1986,60 @@ double MDSimulation::cal_total_K() {
     return K_global;
 }
 
+double MDSimulation::cal_total_scalar_pressure(int periodic_y) {
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+    const int n_local = cfg_manager.config.n_local;
+    const int n_left = cfg_manager.config.n_halo_left;
+    const int n_right = cfg_manager.config.n_halo_right;
+    const double area = cfg_manager.config.box_w_global * cfg_manager.config.box_h_global;
+
+    double local_sum = 0.0;
+    if (n_local > 0) {
+        const int blocks = (n_local + threads - 1) / threads;
+        thrust::device_vector<double> d_partial(blocks);
+
+        cal_local_pressure_scalar_kernel<<<blocks, threads,
+                                           threads * static_cast<int>(sizeof(double))>>>(
+                thrust::raw_pointer_cast(d_particles.data()),
+                thrust::raw_pointer_cast(d_particles_halo_left.data()),
+                thrust::raw_pointer_cast(d_particles_halo_right.data()), n_local,
+                n_left, n_right, cfg_manager.config.box_w_global,
+                cfg_manager.config.box_h_global, cfg_manager.config.MASS_A,
+                cfg_manager.config.MASS_B, cfg_manager.config.SIGMA_AA,
+                cfg_manager.config.SIGMA_BB, cfg_manager.config.SIGMA_AB,
+                cfg_manager.config.EPSILON_AA, cfg_manager.config.EPSILON_BB,
+                cfg_manager.config.EPSILON_AB, cfg_manager.config.cutoff,
+                thrust::raw_pointer_cast(d_partial.data()), periodic_y);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        std::vector<double> h_partial(static_cast<std::size_t>(blocks));
+        CUDA_CHECK(cudaMemcpy(
+                h_partial.data(), thrust::raw_pointer_cast(d_partial.data()),
+                static_cast<size_t>(blocks) * sizeof(double), cudaMemcpyDeviceToHost));
+
+        for (double value : h_partial) {
+            local_sum += value;
+        }
+    }
+
+    double global_sum = 0.0;
+    MPI_Allreduce(&local_sum, &global_sum, 1, MPI_DOUBLE, MPI_SUM, comm);
+
+    if (!(area > 0.0)) {
+        return 0.0;
+    }
+    return global_sum / (2.0 * area);
+}
+
+double MDSimulation::cal_instant_pressure() {
+    last_instant_pressure = cal_total_scalar_pressure(/*periodic_y=*/1);
+    return last_instant_pressure;
+}
+
 double MDSimulation::compute_kinetic_energy_local() {
     const int threads = cfg_manager.config.THREADS_PER_BLOCK;
     const int n_local = cfg_manager.config.n_local;
@@ -1859,6 +2088,7 @@ double MDSimulation::compute_U_energy_local() {
     }
 
     const int blocks = (n_local + threads - 1) / threads;
+    const int periodic_y = 1;
 
     // per-block partial sums on device
     thrust::device_vector<double> d_partial(blocks);
@@ -1872,7 +2102,8 @@ double MDSimulation::compute_U_energy_local() {
             cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_BB,
             cfg_manager.config.SIGMA_AB, cfg_manager.config.EPSILON_AA,
             cfg_manager.config.EPSILON_BB, cfg_manager.config.EPSILON_AB,
-            cfg_manager.config.cutoff, thrust::raw_pointer_cast(d_partial.data()));
+            cfg_manager.config.cutoff, thrust::raw_pointer_cast(d_partial.data()),
+            periodic_y);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -1904,6 +2135,7 @@ double MDSimulation::cal_partial_U_lambda(double epsilon_lambda) {
     const int n_right = cfg_manager.config.n_halo_right;
 
     double local_sum = 0.0;
+    const int periodic_y = 1;
 
     if (n_local > 0) {
         const int blocks = (n_local + threads - 1) / threads;
@@ -1920,7 +2152,8 @@ double MDSimulation::cal_partial_U_lambda(double epsilon_lambda) {
                 cfg_manager.config.SIGMA_BB, cfg_manager.config.SIGMA_AB,
                 cfg_manager.config.EPSILON_AA, cfg_manager.config.EPSILON_BB,
                 cfg_manager.config.EPSILON_AB, cfg_manager.config.cutoff,
-                epsilon_lambda, thrust::raw_pointer_cast(d_partial.data()));
+                epsilon_lambda, thrust::raw_pointer_cast(d_partial.data()),
+                periodic_y);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -3369,6 +3602,7 @@ std::vector<double> MDSimulation::get_pressure_profile(int n_bins_local) {
     }
 
     const int blocks = (n_local + threads - 1) / threads;
+    const int periodic_y = 1;
 
     thrust::device_vector<double> d_P_xx(n_bins_local, 0.0);
     thrust::device_vector<double> d_P_yy(n_bins_local, 0.0);
@@ -3387,7 +3621,7 @@ std::vector<double> MDSimulation::get_pressure_profile(int n_bins_local) {
                 cfg_manager.config.EPSILON_AB, cfg_manager.config.cutoff, n_bins_local,
                 thrust::raw_pointer_cast(d_P_xx.data()),
                 thrust::raw_pointer_cast(d_P_yy.data()),
-                thrust::raw_pointer_cast(d_P_xy.data()));
+                thrust::raw_pointer_cast(d_P_xy.data()), periodic_y);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
     }

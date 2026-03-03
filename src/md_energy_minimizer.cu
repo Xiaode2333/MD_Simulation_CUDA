@@ -388,6 +388,7 @@ void EnergyMinimizer::compute_forces() {
     const int n_local = cfg_manager.config.n_local;
     const int n_left = cfg_manager.config.n_halo_left;
     const int n_right = cfg_manager.config.n_halo_right;
+    const int periodic_y = 1;
 
     if (n_local <= 0) {
         CUDA_CHECK(cudaGetLastError());
@@ -405,7 +406,7 @@ void EnergyMinimizer::compute_forces() {
             cfg_manager.config.SIGMA_AB, cfg_manager.config.EPSILON_AA,
             cfg_manager.config.EPSILON_BB, cfg_manager.config.EPSILON_AB,
             cfg_manager.config.cutoff, cfg_manager.config.MASS_A,
-            cfg_manager.config.MASS_B);
+            cfg_manager.config.MASS_B, periodic_y);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -890,6 +891,7 @@ double EnergyMinimizer::compute_potential() {
     const int n_local = cfg_manager.config.n_local;
     const int n_left = cfg_manager.config.n_halo_left;
     const int n_right = cfg_manager.config.n_halo_right;
+    const int periodic_y = 1;
 
     if (n_local <= 0) {
         return 0.0;
@@ -907,7 +909,8 @@ double EnergyMinimizer::compute_potential() {
             cfg_manager.config.SIGMA_AA, cfg_manager.config.SIGMA_BB,
             cfg_manager.config.SIGMA_AB, cfg_manager.config.EPSILON_AA,
             cfg_manager.config.EPSILON_BB, cfg_manager.config.EPSILON_AB,
-            cfg_manager.config.cutoff, thrust::raw_pointer_cast(d_partial.data()));
+            cfg_manager.config.cutoff, thrust::raw_pointer_cast(d_partial.data()),
+            periodic_y);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 

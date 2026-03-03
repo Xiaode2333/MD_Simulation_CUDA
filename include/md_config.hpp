@@ -43,6 +43,22 @@ struct MDConfig {
     double D_r = 0.0;     // Translational diffusion coefficient
     double D_theta = 0.0; // Rotational diffusion coefficient
 
+    // Periodic-box NPH barostat controls.
+    double barostat_mass = 1.0e4;
+    double barostat_area_rate_init = 0.0;
+    double barostat_height_min_ratio = 0.6;
+    double barostat_height_max_ratio = 1.4;
+    std::string pressure_target_mode = "auto_initial";
+    double P_target = 0.0;
+    int pressure_target_auto_steps = 5000;
+    int pressure_eval_interval_steps = 100;
+    int pressure_window_samples = 50;
+    double pressure_tolerance_rel = 0.05;
+    int pressure_stable_required_windows = 3;
+    int nph_warmup_min_steps = 20000;
+    int nph_warmup_max_steps = 200000;
+    int nph_steps = 300000;
+
     // This rank's prarams
     int rank_idx = 0;
     int n_local;
