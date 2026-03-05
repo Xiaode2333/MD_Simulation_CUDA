@@ -2,12 +2,29 @@
 
 set -euo pipefail
 
-BASE_ROOT="results/20260219_NPH_series"
-ORI_CONFIG="${BASE_ROOT}/config.json"
+BASE_ROOT="./results/20260305_NPH"
+ORI_CONFIG="./tests/run_NPH_test/config_large.json"
+
+EXTRA_OVERRIDES=("$@")
+
+mkdir -p "$BASE_ROOT"
 
 if [ ! -f "$ORI_CONFIG" ]; then
-    echo "[ERROR] ori_config '$ORI_CONFIG' not found. Please place the base config there first." >&2
+    echo "[ERROR] ori_config '$ORI_CONFIG' not found." >&2
     exit 1
+fi
+
+if ! type module >/dev/null 2>&1; then
+    if [ -r /etc/profile.d/modules.sh ]; then
+        source /etc/profile.d/modules.sh
+    elif [ -r /usr/share/Modules/init/bash ]; then
+        source /usr/share/Modules/init/bash
+    elif [ -r /usr/share/lmod/lmod/init/bash ]; then
+        source /usr/share/lmod/lmod/init/bash
+    else
+        echo "[ERROR] 'module' command is unavailable and module init scripts were not found." >&2
+        exit 2
+    fi
 fi
 
 module load StdEnv
@@ -22,22 +39,33 @@ module load git/2.45.1-GCCcore-13.3.0
 module load CMake/3.31.8-GCCcore-13.3.0
 module load nlohmann_json/3.11.3-GCCcore-13.3.0
 
+auto_conda_sh=""
+if command -v conda >/dev/null 2>&1; then
+    auto_conda_sh="$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh"
+fi
+if [ -n "$auto_conda_sh" ] && [ -r "$auto_conda_sh" ]; then
+    source "$auto_conda_sh"
+elif [ -r /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh ]; then
+    source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
+else
+    echo "[ERROR] Could not find conda.sh to activate py3." >&2
+    exit 3
+fi
+set +u
+conda activate py3
+set -u
+
 export CUDA_HOME="/apps/software/2024a/software/CUDA/12.6.0"
 export PATH="$CUDA_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
-
-conda init
-conda activate py3
 export LD_LIBRARY_PATH="/apps/software/2024a/software/CUDA/12.6.0/lib64:/apps/software/2024a/software/CUDA/12.6.0/lib:${LD_LIBRARY_PATH:-}"
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH}"
 export VCPKG_CMAKE="$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake"
-export PYTHONPATH=$(python -c "import site; print(site.getsitepackages()[0])")
 
 PY_EXEC="$(which python)"
 
 if ! GIT_HASH=$(git rev-parse HEAD 2>/dev/null); then
-    echo "[ERROR] Failed to get git commit hash. Is this a git repo and is git available?" >&2
-    exit 1
+    echo "[ERROR] Failed to get git commit hash. Is this a git repo?" >&2
+    exit 4
 fi
 
 BUILD_ROOT="./build_slurm_tmp/build_${GIT_HASH}"
@@ -62,15 +90,11 @@ else
     echo "[INFO] Reusing existing build in '${BUILD_ROOT}' for commit ${GIT_HASH}."
 fi
 
-for T in 0.5 0.6 0.7 0.8 0.9 1.0; do
-    T_DIR="${BASE_ROOT}/T_${T}"
-    mkdir -p "$T_DIR"
-
-    echo "Submitting NPH run for T=${T} into ${T_DIR}"
-    sbatch --job-name="nph_T${T}" \
-        scripts/run_series_NPH.sh \
-        "$T_DIR" \
-        "$ORI_CONFIG" \
-        "$SERIES_BIN" \
-        "DT_target=${T}"
-done
+echo "Submitting NPH temperature array (T=0.5..1.0) into ${BASE_ROOT}"
+sbatch --job-name="nph_20260305" \
+    --array=0-5 \
+    scripts/run_series_NPH.sh \
+    "$BASE_ROOT" \
+    "$ORI_CONFIG" \
+    "$SERIES_BIN" \
+    "${EXTRA_OVERRIDES[@]}"

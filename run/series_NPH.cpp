@@ -2,13 +2,11 @@
 #include "md_env.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
-#include <deque>
 #include <filesystem>
 #include <fstream>
-#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,9 +21,10 @@ struct ProgramOptions {
 };
 
 void print_usage(const char *prog_name) {
-    fmt::print("Usage: {} --base-dir <output_dir> --ori-config <config.json> "
-               "[--D<Param>=<value> ...]\n",
-               prog_name);
+    fmt::print(
+            "Usage: {} --base-dir <output_dir> --ori-config <config.json> "
+            "[--D<Param>=<value> ...]\n",
+            prog_name);
 }
 
 std::string consume_value(const std::string &arg, int argc, char **argv,
@@ -89,55 +88,183 @@ ProgramOptions parse_args(int argc, char **argv) {
 }
 
 enum class Phase {
-    AUTO_TARGET = 0,
-    NPH_WARMUP = 1,
-    NPH_PRODUCTION = 2,
+    NVT = 0,
+    NPH = 1,
 };
 
-const char *phase_name(Phase p) {
-    switch (p) {
-    case Phase::AUTO_TARGET:
-        return "AUTO_TARGET";
-    case Phase::NPH_WARMUP:
-        return "NPH_WARMUP";
-    case Phase::NPH_PRODUCTION:
-        return "NPH_PRODUCTION";
+const char *phase_name(const Phase phase) {
+    switch (phase) {
+    case Phase::NVT:
+        return "NVT";
+    case Phase::NPH:
+        return "NPH";
     default:
         return "UNKNOWN";
     }
 }
 
-struct RollingStats {
-    double mean = 0.0;
-    double stddev = 0.0;
+struct TriTypeStats {
+    std::array<int, 4> counts{0, 0, 0, 0};
+    std::array<double, 4> areas{0.0, 0.0, 0.0, 0.0};
 };
 
-RollingStats compute_stats(const std::deque<double> &values) {
-    RollingStats out{};
-    if (values.empty()) {
+TriTypeStats compute_tri_type_stats(const TriangulationResult &tri,
+                                    const std::vector<Particle> &particles) {
+    TriTypeStats out{};
+
+    const std::size_t vert_count = tri.vertex_to_idx.size();
+    if (vert_count == 0 || tri.triangles.empty()) {
+        return out;
+    }
+    if (tri.coords.size() < 2 * vert_count) {
         return out;
     }
 
-    const double sum = std::accumulate(values.begin(), values.end(), 0.0);
-    out.mean = sum / static_cast<double>(values.size());
+    auto vertex_type = [&](int v_idx) -> int {
+        if (v_idx < 0 || v_idx >= static_cast<int>(vert_count)) {
+            return -1;
+        }
+        const int p_idx = tri.vertex_to_idx[static_cast<std::size_t>(v_idx)];
+        if (p_idx < 0 || p_idx >= static_cast<int>(particles.size())) {
+            return -1;
+        }
+        return particles[static_cast<std::size_t>(p_idx)].type;
+    };
 
-    if (values.size() <= 1) {
-        out.stddev = 0.0;
-        return out;
+    for (const auto &tri_idx : tri.triangles) {
+        const int v0 = tri_idx[0];
+        const int v1 = tri_idx[1];
+        const int v2 = tri_idx[2];
+
+        const int t0 = vertex_type(v0);
+        const int t1 = vertex_type(v1);
+        const int t2 = vertex_type(v2);
+
+        if (!((t0 == 0 || t0 == 1) && (t1 == 0 || t1 == 1) &&
+              (t2 == 0 || t2 == 1))) {
+            continue;
+        }
+
+        const int a_count = (t0 == 0) + (t1 == 0) + (t2 == 0);
+        int type_idx = -1;
+        switch (a_count) {
+        case 3:
+            type_idx = 0; // AAA
+            break;
+        case 2:
+            type_idx = 1; // AAB
+            break;
+        case 1:
+            type_idx = 2; // ABB
+            break;
+        case 0:
+            type_idx = 3; // BBB
+            break;
+        default:
+            break;
+        }
+        if (type_idx < 0) {
+            continue;
+        }
+
+        if (v0 < 0 || v1 < 0 || v2 < 0 ||
+            static_cast<std::size_t>(v0) >= vert_count ||
+            static_cast<std::size_t>(v1) >= vert_count ||
+            static_cast<std::size_t>(v2) >= vert_count) {
+            continue;
+        }
+
+        const double x0 = tri.coords[2 * static_cast<std::size_t>(v0) + 0];
+        const double y0 = tri.coords[2 * static_cast<std::size_t>(v0) + 1];
+        const double x1 = tri.coords[2 * static_cast<std::size_t>(v1) + 0];
+        const double y1 = tri.coords[2 * static_cast<std::size_t>(v1) + 1];
+        const double x2 = tri.coords[2 * static_cast<std::size_t>(v2) + 0];
+        const double y2 = tri.coords[2 * static_cast<std::size_t>(v2) + 1];
+
+        const double twice_area =
+                (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+        const double area = 0.5 * std::abs(twice_area);
+
+        ++out.counts[static_cast<std::size_t>(type_idx)];
+        out.areas[static_cast<std::size_t>(type_idx)] += area;
     }
 
-    double var_sum = 0.0;
-    for (double value : values) {
-        const double diff = value - out.mean;
-        var_sum += diff * diff;
-    }
-    out.stddev = std::sqrt(var_sum / static_cast<double>(values.size() - 1));
     return out;
+}
+
+struct RecordContext {
+    int global_step = 0;
+    int phase_step = 0;
+    double time = 0.0;
+    double dt = 0.0;
+    Phase phase = Phase::NVT;
+};
+
+bool append_observables(const fs::path &observables_csv,
+                        const fs::path &tri_csv, MDSimulation &sim,
+                        const RecordContext &ctx, int rank_idx,
+                        const std::string &tag, double barostat_mass,
+                        bool compute_pressure_from_scratch) {
+    sim.sample_collect();
+
+    const double U_tot = sim.cal_total_U();
+    const double K_tot = sim.cal_total_K();
+    const double pressure = compute_pressure_from_scratch
+                                    ? sim.cal_instant_pressure()
+                                    : sim.get_last_instant_pressure();
+
+    const double Lx = sim.get_Lx();
+    const double Ly = sim.get_Ly();
+    const double volume = Lx * Ly;
+    const double L_tot = sim.get_interface_total_length();
+
+    const double area_rate = (ctx.phase == Phase::NPH) ? sim.get_nph_area_rate() : 0.0;
+    const double barostat_kinetic = 0.5 * barostat_mass * area_rate * area_rate;
+
+    double ab_length = 0.0;
+    TriTypeStats tri_stats{};
+
+    const auto tri_result = sim.triangulation_plot(false, "", "");
+    if (tri_result.has_value()) {
+        std::vector<Particle> host_particles;
+        sim.get_host_particles(host_particles);
+
+        tri_stats = compute_tri_type_stats(*tri_result, host_particles);
+
+        const ABPairNetworks ab_networks =
+                sim.get_AB_pair_network(*tri_result, false);
+        ab_length = sim.get_AB_pair_length(ab_networks);
+    }
+
+    const bool ok_obs = append_csv(
+            observables_csv, rank_idx, tag,
+            "{},{},{:.8f},{},{:.8e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e}\n",
+            ctx.global_step, ctx.phase_step, ctx.time, phase_name(ctx.phase),
+            ctx.dt, U_tot, K_tot, pressure, barostat_kinetic, Lx, Ly, volume,
+            L_tot, ab_length);
+
+    const bool ok_tri = append_csv(
+            tri_csv, rank_idx, tag,
+            "{},{},{:.8f},{},{},{},{},{},{:.10e},{:.10e},{:.10e},{:.10e}\n",
+            ctx.global_step, ctx.phase_step, ctx.time, phase_name(ctx.phase),
+            tri_stats.counts[0], tri_stats.counts[1], tri_stats.counts[2],
+            tri_stats.counts[3], tri_stats.areas[0], tri_stats.areas[1],
+            tri_stats.areas[2], tri_stats.areas[3]);
+
+    return ok_obs && ok_tri;
 }
 
 } // namespace
 
 int main(int argc, char **argv) {
+    constexpr double kNvtDt = 1.0e-3;
+    constexpr double kNphDt = 1.0e-4;
+    constexpr int kNvtSteps = 100000;
+    constexpr int kNphSteps = 5000000;
+    constexpr int kNvtSnapshots = 20;
+    constexpr int kNphSnapshots = 20;
+    constexpr double kRecordDt = 1.0;
+
     ProgramOptions options;
     try {
         options = parse_args(argc, argv);
@@ -146,55 +273,65 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    MDConfigManager cfg_mgr =
+    MDConfigManager cfg_base =
             MDConfigManager::config_from_json(options.ori_config);
     if (!options.overrides.empty()) {
-        cfg_mgr.apply_overrides(options.overrides);
+        cfg_base.apply_overrides(options.overrides);
     }
 
     MPI_Init(nullptr, nullptr);
+
     int rank_size = 0;
     int rank_idx = 0;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank_idx);
     MPI_Comm_size(MPI_COMM_WORLD, &rank_size);
 
-    if (cfg_mgr.config.rank_size != rank_size) {
+    if (cfg_base.config.rank_size != rank_size) {
         fmt::print(stderr,
                    "[run_series_NPH] rank size = {} doesn't match config.\n",
                    rank_size);
         MPI_Abort(MPI_COMM_WORLD, 2);
     }
 
-    cfg_mgr.config.rank_size = rank_size;
-    cfg_mgr.config.rank_idx = rank_idx;
-    const int n_record_interval =
-            std::max(1, static_cast<int>(cfg_mgr.config.save_dt_interval /
-                                         cfg_mgr.config.dt));
-    const int eval_interval =
-            std::max(1, cfg_mgr.config.pressure_eval_interval_steps);
-    const int auto_target_steps =
-            std::max(1, cfg_mgr.config.pressure_target_auto_steps);
-    const int window_samples =
-            std::max(2, cfg_mgr.config.pressure_window_samples);
-    const int stable_required =
-            std::max(1, cfg_mgr.config.pressure_stable_required_windows);
-    const int warmup_min_steps =
-            std::max(0, cfg_mgr.config.nph_warmup_min_steps);
-    const int warmup_max_steps = std::max(
-            warmup_min_steps + 1, cfg_mgr.config.nph_warmup_max_steps);
-    const int nph_steps_target = std::max(1, cfg_mgr.config.nph_steps);
-    const int snapshot_interval = std::max(1, 100 * n_record_interval);
+    cfg_base.config.rank_size = rank_size;
+    cfg_base.config.rank_idx = rank_idx;
+
+    MDConfigManager cfg_nvt = cfg_base;
+    cfg_nvt.config.dt = kNvtDt;
+    cfg_nvt.config.rank_size = rank_size;
+    cfg_nvt.config.rank_idx = rank_idx;
+
+    MDConfigManager cfg_nph = cfg_base;
+    cfg_nph.config.dt = kNphDt;
+    cfg_nph.config.rank_size = rank_size;
+    cfg_nph.config.rank_idx = rank_idx;
+
+    const int nvt_record_interval =
+            std::max(1, static_cast<int>(std::llround(kRecordDt / kNvtDt)));
+    const int nph_record_interval =
+            std::max(1, static_cast<int>(std::llround(kRecordDt / kNphDt)));
+    const int nvt_snapshot_interval = std::max(1, kNvtSteps / kNvtSnapshots);
+    const int nph_snapshot_interval = std::max(1, kNphSteps / kNphSnapshots);
 
     const fs::path base_dir = fs::path(options.base_dir);
     const fs::path sample_dir = base_dir / "sample_csv";
     const fs::path saved_env_dir = base_dir / "saved_env";
     const fs::path saved_env_file = saved_env_dir / "saved_env.bin";
-    const fs::path saved_cfg_path = base_dir / "config.json";
-    const fs::path pressure_csv = sample_dir / "pressure.csv";
-    const fs::path barostat_csv = sample_dir / "barostat_state.csv";
-    const fs::path thermo_csv = sample_dir / "thermo_log.csv";
+    const fs::path frame_dir = base_dir / "frames";
+    const fs::path frame_nvt_dir = frame_dir / "NVT";
+    const fs::path frame_nph_dir = frame_dir / "NPH";
+    const fs::path frame_csv_dir = frame_dir / "csv";
+    const fs::path nvt_plot_csv = frame_csv_dir / "nvt_plot_input.csv";
+    const fs::path nph_plot_csv = frame_csv_dir / "nph_plot_input.csv";
+    const fs::path cfg_nvt_path = base_dir / "config_nvt.json";
+    const fs::path cfg_nph_path = base_dir / "config_nph.json";
 
-    for (const auto &dir : {base_dir, sample_dir, saved_env_dir}) {
+    const fs::path observables_csv = sample_dir / "observables.csv";
+    const fs::path tri_csv = sample_dir / "triangulation_stats.csv";
+
+    for (const auto &dir :
+         {base_dir, sample_dir, saved_env_dir, frame_dir, frame_nvt_dir,
+          frame_nph_dir, frame_csv_dir}) {
         if (!create_folder(dir, rank_idx)) {
             MPI_Abort(MPI_COMM_WORLD, 3);
         }
@@ -203,194 +340,157 @@ int main(int argc, char **argv) {
     const std::string tag = "run_series_NPH";
 
     if (rank_idx == 0) {
-        std::ofstream clear_pressure(pressure_csv, std::ios::out | std::ios::trunc);
-        std::ofstream clear_barostat(barostat_csv,
-                                     std::ios::out | std::ios::trunc);
-        std::ofstream clear_thermo(thermo_csv, std::ios::out | std::ios::trunc);
+        std::error_code rm_ec;
+        fs::remove(saved_env_file, rm_ec);
 
-        if (!clear_pressure || !clear_barostat || !clear_thermo) {
+        std::ofstream clear_observables(observables_csv,
+                                        std::ios::out | std::ios::trunc);
+        std::ofstream clear_tri(tri_csv, std::ios::out | std::ios::trunc);
+        std::ofstream clear_nvt_plot_csv(nvt_plot_csv,
+                                         std::ios::out | std::ios::trunc);
+        std::ofstream clear_nph_plot_csv(nph_plot_csv,
+                                         std::ios::out | std::ios::trunc);
+
+        if (!clear_observables || !clear_tri || !clear_nvt_plot_csv ||
+            !clear_nph_plot_csv) {
             fmt::print(stderr,
-                       "[run_series_NPH] Failed to initialize CSV outputs in {}.\n",
+                       "[run_series_NPH] Failed to initialize outputs in {}.\n",
                        sample_dir.string());
             MPI_Abort(MPI_COMM_WORLD, 4);
         }
 
-        append_csv(pressure_csv, rank_idx, tag,
-                   "step,t,phase,P_inst,P_target,rolling_mean,rolling_std,rel_err,Lx,Ly,area,dA_dt\n");
-        append_csv(barostat_csv, rank_idx, tag,
-                   "step,t,phase,Lx,Ly,area,dA_dt,a_barostat,P_inst,P_target\n");
-        append_csv(thermo_csv, rank_idx, tag,
-                   "step,t,phase,U_tot,K_tot,P_inst,P_target,Lx,Ly,area\n");
+        append_csv(observables_csv, rank_idx, tag,
+                   "global_step,phase_step,time,phase,dt,U_tot,K_tot,P,box_motion_K,Lx,Ly,volume,L_tot,AB_pair_length\n");
+        append_csv(tri_csv, rank_idx, tag,
+                   "global_step,phase_step,time,phase,AAA_count,AAB_count,ABB_count,BBB_count,AAA_area,AAB_area,ABB_area,BBB_area\n");
 
-        cfg_mgr.config_to_json(saved_cfg_path.string());
-        cfg_mgr.print_config();
+        cfg_nvt.config_to_json(cfg_nvt_path.string());
+        cfg_nph.config_to_json(cfg_nph_path.string());
+        cfg_base.print_config();
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
 
-    MDSimulation sim(cfg_mgr, MPI_COMM_WORLD);
+    int global_step = 0;
+    double global_time = 0.0;
+    int nvt_saved_snapshots = 0;
+    int nph_saved_snapshots = 0;
 
-    Phase phase = Phase::AUTO_TARGET;
-    if (cfg_mgr.config.pressure_target_mode != "auto_initial") {
-        phase = Phase::NPH_WARMUP;
-    }
+    {
+        MDSimulation sim(cfg_nvt, MPI_COMM_WORLD);
 
-    double P_target = cfg_mgr.config.P_target;
-    int auto_steps_done = 0;
-    int warmup_steps_done = 0;
-    int nph_steps_done = 0;
-    int stable_windows = 0;
-    bool finished = false;
-
-    std::deque<double> auto_samples;
-    std::deque<double> pressure_window;
-
-    const int hard_step_limit =
-            auto_target_steps + warmup_max_steps + nph_steps_target + 100000;
-
-    for (int step = 0; step < hard_step_limit && !finished; ++step) {
-        const Phase phase_used = phase;
-
-        double P_inst = 0.0;
-        if (phase_used == Phase::AUTO_TARGET) {
+        for (int phase_step = 1; phase_step <= kNvtSteps; ++phase_step) {
             sim.step_single_nose_hoover();
-            P_inst = sim.cal_instant_pressure();
-        } else {
-            sim.step_single_NPH(P_target);
-            P_inst = sim.get_last_instant_pressure();
-        }
 
-        const bool do_record = (step % n_record_interval == 0);
-        const bool do_snapshot = (step % snapshot_interval == 0);
+            ++global_step;
+            global_time += kNvtDt;
 
-        double U_tot_interval = 0.0;
-        double K_tot_interval = 0.0;
-        if (do_record) {
-            sim.sample_collect();
-            U_tot_interval = sim.cal_total_U();
-            K_tot_interval = sim.cal_total_K();
-            if (do_snapshot) {
-                sim.save_env(saved_env_file.string(), step);
-            }
-        }
-
-        if (rank_idx == 0) {
-            if (phase_used == Phase::AUTO_TARGET) {
-                ++auto_steps_done;
-            } else if (phase_used == Phase::NPH_WARMUP) {
-                ++warmup_steps_done;
-            } else {
-                ++nph_steps_done;
-            }
-
-            if (step % eval_interval == 0) {
-                if (phase_used == Phase::AUTO_TARGET) {
-                    auto_samples.push_back(P_inst);
-                } else {
-                    pressure_window.push_back(P_inst);
-                    while (static_cast<int>(pressure_window.size()) > window_samples) {
-                        pressure_window.pop_front();
-                    }
-                }
-            }
-
-            if (phase_used == Phase::AUTO_TARGET &&
-                auto_steps_done >= auto_target_steps && !auto_samples.empty()) {
-                const double sum =
-                        std::accumulate(auto_samples.begin(), auto_samples.end(), 0.0);
-                P_target = sum / static_cast<double>(auto_samples.size());
-                phase = Phase::NPH_WARMUP;
-                pressure_window.clear();
-                stable_windows = 0;
-                fmt::print("[run_series_NPH] AUTO_TARGET complete at step {}. "
-                           "P_target={}\n",
-                           step, P_target);
-            }
-
-            if (phase_used == Phase::NPH_WARMUP) {
-                if (warmup_steps_done >= warmup_min_steps &&
-                    static_cast<int>(pressure_window.size()) >= window_samples) {
-                    const RollingStats stats = compute_stats(pressure_window);
-                    const double denom = std::max(1e-12, std::abs(P_target));
-                    const double rel_err = std::abs(stats.mean - P_target) / denom;
-                    const double rel_std = stats.stddev / denom;
-
-                    if (rel_err <= cfg_mgr.config.pressure_tolerance_rel &&
-                        rel_std <= cfg_mgr.config.pressure_tolerance_rel) {
-                        ++stable_windows;
-                    } else {
-                        stable_windows = 0;
-                    }
-
-                    if (stable_windows >= stable_required) {
-                        phase = Phase::NPH_PRODUCTION;
-                        fmt::print("[run_series_NPH] Warmup complete at step {}.\n",
-                                   step);
-                    }
-                }
-
-                if (phase == Phase::NPH_WARMUP &&
-                    warmup_steps_done >= warmup_max_steps) {
-                    phase = Phase::NPH_PRODUCTION;
-                    fmt::print("[run_series_NPH] Forced warmup->production switch at "
-                               "step {}.\n",
-                               step);
-                }
-            }
-
-            const double area = sim.get_Lx() * sim.get_Ly();
-            const double dA_dt =
-                    (phase_used == Phase::AUTO_TARGET) ? 0.0 : sim.get_nph_area_rate();
-            const double a_barostat =
-                    (phase_used == Phase::AUTO_TARGET)
-                            ? 0.0
-                            : (P_inst - P_target) /
-                                      std::max(cfg_mgr.config.barostat_mass, 1e-12);
-
-            if (step % eval_interval == 0) {
-                RollingStats stats{};
-                if (!pressure_window.empty()) {
-                    stats = compute_stats(pressure_window);
-                }
-                const double denom = std::max(1e-12, std::abs(P_target));
-                const double rel_err = std::abs(stats.mean - P_target) / denom;
-
-                append_csv(pressure_csv, rank_idx, tag,
-                           "{},{:.6f},{},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e}\n",
-                           step, sim.t, phase_name(phase_used), P_inst, P_target,
-                           stats.mean, stats.stddev, rel_err, sim.get_Lx(),
-                           sim.get_Ly(), area, dA_dt);
-
-                append_csv(barostat_csv, rank_idx, tag,
-                           "{},{:.6f},{},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e}\n",
-                           step, sim.t, phase_name(phase_used), sim.get_Lx(),
-                           sim.get_Ly(), area, dA_dt, a_barostat, P_inst, P_target);
-            }
+            const bool do_record = (phase_step % nvt_record_interval == 0);
+            const bool do_snapshot = (phase_step % nvt_snapshot_interval == 0);
 
             if (do_record) {
-                append_csv(thermo_csv, rank_idx, tag,
-                           "{},{:.6f},{},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e}\n",
-                           step, sim.t, phase_name(phase_used), U_tot_interval,
-                           K_tot_interval, P_inst, P_target, sim.get_Lx(),
-                           sim.get_Ly(), area);
-            }
+                const RecordContext ctx{global_step, phase_step, global_time,
+                                        kNvtDt, Phase::NVT};
+                if (!append_observables(observables_csv, tri_csv, sim, ctx,
+                                        rank_idx, tag,
+                                        std::max(cfg_base.config.barostat_mass,
+                                                 1.0e-12),
+                                        true)) {
+                    MPI_Abort(MPI_COMM_WORLD, 5);
+                }
 
-            if (phase_used == Phase::NPH_PRODUCTION &&
-                nph_steps_done >= nph_steps_target) {
-                finished = true;
+                if (do_snapshot) {
+                    sim.save_env(saved_env_file.string(), global_step);
+                    if (rank_idx == 0) {
+                        ++nvt_saved_snapshots;
+                        std::vector<Particle> frame_particles;
+                        sim.get_host_particles(frame_particles);
+                        const fs::path frame_svg =
+                                frame_nvt_dir /
+                                fmt::format("snapshot_{:02d}_step_{}.svg",
+                                            nvt_saved_snapshots, global_step);
+                        try {
+                            plot_particles_python(
+                                    frame_particles, frame_svg.string(),
+                                    nvt_plot_csv.string(), sim.get_Lx(),
+                                    sim.get_Ly(), cfg_base.config.SIGMA_AA,
+                                    cfg_base.config.SIGMA_BB);
+                        } catch (const std::exception &e) {
+                            fmt::print(
+                                    stderr,
+                                    "[run_series_NPH] Failed to plot NVT frame at step {}: {}\n",
+                                    global_step, e.what());
+                            MPI_Abort(MPI_COMM_WORLD, 7);
+                        }
+                    }
+                }
             }
         }
-
-        int phase_int = static_cast<int>(phase);
-        MPI_Bcast(&phase_int, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        phase = static_cast<Phase>(phase_int);
-        MPI_Bcast(&P_target, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&finished, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
     }
 
-    if (!finished && rank_idx == 0) {
-        fmt::print(stderr,
-                   "[run_series_NPH] Hard step limit reached. Stopping run.\n");
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    const int nvt_restart_frame = global_step;
+
+    {
+        MDSimulation sim(cfg_nph, MPI_COMM_WORLD, saved_env_file.string(),
+                         nvt_restart_frame);
+
+        for (int phase_step = 1; phase_step <= kNphSteps; ++phase_step) {
+            sim.step_single_NPH(cfg_nph.config.P_target);
+
+            ++global_step;
+            global_time += kNphDt;
+
+            const bool do_record = (phase_step % nph_record_interval == 0);
+            const bool do_snapshot = (phase_step % nph_snapshot_interval == 0);
+
+            if (do_record) {
+                const RecordContext ctx{global_step, phase_step, global_time,
+                                        kNphDt, Phase::NPH};
+                if (!append_observables(observables_csv, tri_csv, sim, ctx,
+                                        rank_idx, tag,
+                                        std::max(cfg_base.config.barostat_mass,
+                                                 1.0e-12),
+                                        false)) {
+                    MPI_Abort(MPI_COMM_WORLD, 6);
+                }
+
+                if (do_snapshot) {
+                    sim.save_env(saved_env_file.string(), global_step);
+                    if (rank_idx == 0) {
+                        ++nph_saved_snapshots;
+                        std::vector<Particle> frame_particles;
+                        sim.get_host_particles(frame_particles);
+                        const fs::path frame_svg =
+                                frame_nph_dir /
+                                fmt::format("snapshot_{:02d}_step_{}.svg",
+                                            nph_saved_snapshots, global_step);
+                        try {
+                            plot_particles_python(
+                                    frame_particles, frame_svg.string(),
+                                    nph_plot_csv.string(), sim.get_Lx(),
+                                    sim.get_Ly(), cfg_base.config.SIGMA_AA,
+                                    cfg_base.config.SIGMA_BB);
+                        } catch (const std::exception &e) {
+                            fmt::print(
+                                    stderr,
+                                    "[run_series_NPH] Failed to plot NPH frame at step {}: {}\n",
+                                    global_step, e.what());
+                            MPI_Abort(MPI_COMM_WORLD, 8);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (rank_idx == 0) {
+        fmt::print(
+                "[run_series_NPH] Done. NVT snapshots={} (target={}), "
+                "NPH snapshots={} (target={}), final_step={}, final_time={:.6f}\n",
+                nvt_saved_snapshots, kNvtSnapshots, nph_saved_snapshots,
+                kNphSnapshots, global_step, global_time);
     }
 
     MPI_Finalize();
