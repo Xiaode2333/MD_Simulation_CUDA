@@ -1,7 +1,0 @@
-write a series slurm tasks, use tests/run_NPH_test/config_large.json as basic config. For T = 0.5, 0.6, 0.7, ..., 1.0, each temperature corresponds to one slurm task, submit them by a task vector.
-1. For the NVT phase use dt = 1e-3 and run for 100 unit time.(100000 steps). Take 20 snapshots in this phase.
-2. Then the system goes to NPH simulation, use dt = 1e-4 and run for 500 unit time(5000000 steps). This is phase 2. Also take 20 snapshots in this phase.
-3. For both the phases, save the following variables every 1 unit time: a. the coupling box size motion's kinetic energy, b. total U, total K of particles. c. Lx, Ly, and volume of the box. d.  L_tot = sim.get_interface_total_length(); e. step count f. triangle type counts including numbers of AAA, AAB, ABB, BBB. And area of AAA, AAB, ABB, BBB.  g. Pressure. h. AB pair length: ab_length = sim.get_AB_pair_length(ab_networks);
-4. To save the data in step 3, make sure that we don't make a new csv file for each time point, we use a same series of csvs to record across time. Because we have limited quota for file count. use append for csv recording. You are allowed to use differenct csv files for different genres of data.
-5. write the series submit script in ./run/series_NPH.cpp(overwrite it). Use git version id's build like we do for previous ones as the excutes. (check how we did previously, basically we build a temporary build with specific git version and the slurm use this build, so that we can edit our project while slurm is running)
-6. Use ./results/20260305_NPH/T={T} for saving folders. 
