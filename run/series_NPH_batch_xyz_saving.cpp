@@ -147,8 +147,6 @@ int main(int argc, char **argv) {
     constexpr int kNvtSteps = 100000;
     constexpr int kNphSteps = 5000000;
     constexpr double kSnapshotDt = 1.0e-1;
-    constexpr int kNvtSnapshots = 20;
-    constexpr int kNphSnapshots = 20;
 
     ProgramOptions options;
     try {
@@ -235,8 +233,7 @@ int main(int argc, char **argv) {
             ++global_step;
             global_time += kNvtDt;
 
-            const bool do_snapshot = (phase_step % nvt_snapshot_interval == 0) &&
-                                     (nvt_saved_snapshots < kNvtSnapshots);
+            const bool do_snapshot = (phase_step % nvt_snapshot_interval == 0);
             if (!do_snapshot) {
                 continue;
             }
@@ -281,8 +278,7 @@ int main(int argc, char **argv) {
             ++global_step;
             global_time += kNphDt;
 
-            const bool do_snapshot = (phase_step % nph_snapshot_interval == 0) &&
-                                     (nph_saved_snapshots < kNphSnapshots);
+            const bool do_snapshot = (phase_step % nph_snapshot_interval == 0);
             if (!do_snapshot) {
                 continue;
             }
@@ -318,11 +314,11 @@ int main(int argc, char **argv) {
         fs::remove(restart_file, rm_ec);
 
         fmt::print(
-                "[run_series_NPH_batch_xyz_saving] Done. NVT snapshots={} "
-                "(target={}), NPH snapshots={} (target={}), final_step={}, "
-                "final_time={:.6f}\n",
-                nvt_saved_snapshots, kNvtSnapshots, nph_saved_snapshots,
-                kNphSnapshots, global_step, global_time);
+                "[run_series_NPH_batch_xyz_saving] Done. NVT snapshots={}, "
+                "NPH snapshots={}, final_step={}, final_time={:.6f}, "
+                "snapshot_dt={:.6f}\n",
+                nvt_saved_snapshots, nph_saved_snapshots, global_step,
+                global_time, kSnapshotDt);
     }
 
     MPI_Finalize();

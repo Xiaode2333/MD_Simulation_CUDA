@@ -48,6 +48,8 @@ fi
 T_VALUE="${TEMPS[$TASK_ID]}"
 BASE_DIR="${BASE_ROOT}/T=${T_VALUE}"
 mkdir -p -- "$BASE_DIR"
+CONFIGS_DIR="${BASE_DIR}/configs"
+mkdir -p -- "$CONFIGS_DIR"
 
 if ! type module >/dev/null 2>&1; then
     if [ -r /etc/profile.d/modules.sh ]; then
@@ -99,6 +101,22 @@ export CUDA_HOME="/apps/software/2024a/software/CUDA/12.6.0"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="/apps/software/2024a/software/CUDA/12.6.0/lib64:/apps/software/2024a/software/CUDA/12.6.0/lib:${LD_LIBRARY_PATH:-}"
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH}"
+
+if ! GIT_HASH=$(git rev-parse HEAD 2>/dev/null); then
+    GIT_HASH="unknown"
+fi
+RUN_TS=$(date +"%Y-%m-%d %H:%M")
+
+cat > "${BASE_DIR}/version.json" <<EOF_JSON
+{
+  "git_hash": "${GIT_HASH}",
+  "timestamp": "${RUN_TS}",
+  "temperature": ${T_VALUE},
+  "slurm_array_task_id": ${TASK_ID}
+}
+EOF_JSON
+
+cp -f -- "$ORI_CONFIG" "${CONFIGS_DIR}/$(basename "$ORI_CONFIG")"
 
 override_cli=()
 override_cli+=("--DT_init=${T_VALUE}")

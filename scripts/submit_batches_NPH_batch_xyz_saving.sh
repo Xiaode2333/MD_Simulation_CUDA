@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_ROOT="./results/20260307_NPH_batch_xyz_saving"
+BASE_ROOT="./results/20260309_NPH_batch_xyz_saving"
 ORI_CONFIG="./tests/run_NPH_test/config_large.json"
 
 EXTRA_OVERRIDES=("$@")
