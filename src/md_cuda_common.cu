@@ -393,6 +393,21 @@ __global__ void step_half_vv_kernel(Particle *particles, int n_local, double dt,
     particles[idx].pos.y = pbc_wrap_hd(particles[idx].pos.y, Ly);
 }
 
+__global__ void step_half_vv_piston_kernel(Particle *particles, int n_local,
+                                           double dt, double Lx) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= n_local) {
+        return;
+    }
+
+    particles[idx].vel.x += 0.5 * dt * particles[idx].acc.x;
+    particles[idx].vel.y += 0.5 * dt * particles[idx].acc.y;
+    particles[idx].pos.x += dt * particles[idx].vel.x;
+    particles[idx].pos.y += dt * particles[idx].vel.y;
+    particles[idx].pos.x = pbc_wrap_hd(particles[idx].pos.x, Lx);
+}
+
 __global__ void step_half_nph_velocity_kernel(Particle *particles, int n_local,
                                               double dt) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -478,6 +493,62 @@ __global__ void step_2nd_half_vv_nh_kernel(Particle *particles, int n_local,
 
     particles[idx].vel.x = vx;
     particles[idx].vel.y = vy;
+}
+
+__global__ void piston_wall_kernel(Particle *particles, int n_local, double Ly,
+                                   double k_piston, double mass_A,
+                                   double mass_B, bool update_particle_acc,
+                                   double *partial_upper_force,
+                                   double *partial_wall_energy) {
+    extern __shared__ double sdata[];
+    double *s_upper_force = sdata;
+    double *s_wall_energy = sdata + blockDim.x;
+
+    const int tid = threadIdx.x;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    double upper_force = 0.0;
+    double wall_energy = 0.0;
+
+    if (idx < n_local && k_piston > 0.0) {
+        Particle &p = particles[idx];
+        double wall_force_y = 0.0;
+
+        if (p.pos.y > Ly) {
+            const double overlap = p.pos.y - Ly;
+            wall_force_y -= k_piston * overlap;
+            upper_force += k_piston * overlap;
+            wall_energy += 0.5 * k_piston * overlap * overlap;
+        }
+
+        if (p.pos.y < 0.0) {
+            const double overlap = -p.pos.y;
+            wall_force_y += k_piston * overlap;
+            wall_energy += 0.5 * k_piston * overlap * overlap;
+        }
+
+        if (update_particle_acc && wall_force_y != 0.0) {
+            const double mass = (p.type == 0 ? mass_A : mass_B);
+            p.acc.y += wall_force_y / mass;
+        }
+    }
+
+    s_upper_force[tid] = upper_force;
+    s_wall_energy[tid] = wall_energy;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            s_upper_force[tid] += s_upper_force[tid + s];
+            s_wall_energy[tid] += s_wall_energy[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        partial_upper_force[blockIdx.x] = s_upper_force[0];
+        partial_wall_energy[blockIdx.x] = s_wall_energy[0];
+    }
 }
 
 __global__ void cal_local_K_kernel(const Particle *__restrict__ particles,

@@ -23,6 +23,7 @@
     "save_dt_interval": 1.0,
 
     "barostat_mass": 10000.0,
+    "k_piston": 100.0,
     "barostat_area_rate_init": 0.0,
     "barostat_height_min_ratio": 0.01,
     "barostat_height_max_ratio": 100,

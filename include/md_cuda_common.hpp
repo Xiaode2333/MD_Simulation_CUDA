@@ -84,6 +84,11 @@ __global__ void cal_partial_U_lambda_kernel(
 __global__ void step_half_vv_kernel(Particle *particles, int n_local, double dt,
                                     double Lx, double Ly);
 
+// Velocity-Verlet half kick + drift for piston-wall runs: x is periodic, y is
+// left unwrapped so the soft walls can act through forces.
+__global__ void step_half_vv_piston_kernel(Particle *particles, int n_local,
+                                           double dt, double Lx);
+
 // NPH half-kick on physical velocities. This corresponds to a half-step update
 // of the scaled momentum in the extended-system formulation.
 __global__ void step_half_nph_velocity_kernel(Particle *particles, int n_local,
@@ -107,6 +112,17 @@ __global__ void step_half_vv_nh_kernel(Particle *particles, int n_local,
 
 __global__ void step_2nd_half_vv_nh_kernel(Particle *particles, int n_local,
                                            double dt, double xi);
+
+// Apply the soft lower wall at y = 0 and the moving soft piston wall at y = Ly.
+// When update_particle_acc is true, the wall force contribution is added to
+// particles[idx].acc.y. The kernel also accumulates per-block partial sums of:
+//   partial_upper_force : total force from particles onto the upper piston
+//   partial_wall_energy : total wall potential energy (upper + lower walls)
+__global__ void piston_wall_kernel(Particle *particles, int n_local, double Ly,
+                                   double k_piston, double mass_A,
+                                   double mass_B, bool update_particle_acc,
+                                   double *partial_upper_force,
+                                   double *partial_wall_energy);
 
 __global__ void cal_local_K_kernel(const Particle *__restrict__ particles,
                                    int n_local, double mass_A, double mass_B,

@@ -1541,7 +1541,41 @@ void MDSimulation::cal_forces() {
     CUDA_CHECK(cudaDeviceSynchronize());
 }
 
+void MDSimulation::cal_forces_piston() {
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
+    const int n_local = cfg_manager.config.n_local;
+    const int n_left = cfg_manager.config.n_halo_left;
+    const int n_right = cfg_manager.config.n_halo_right;
+
+    if (n_local > 0) {
+        const int blocks = (n_local + threads - 1) / threads;
+        const int periodic_y = 0;
+        li_force_kernel<<<blocks, threads>>>(
+                thrust::raw_pointer_cast(d_particles.data()),
+                thrust::raw_pointer_cast(d_particles_halo_left.data()),
+                thrust::raw_pointer_cast(d_particles_halo_right.data()), n_local,
+                n_left, n_right, cfg_manager.config.box_w_global,
+                cfg_manager.config.box_h_global, cfg_manager.config.SIGMA_AA,
+                cfg_manager.config.SIGMA_BB, cfg_manager.config.SIGMA_AB,
+                cfg_manager.config.EPSILON_AA, cfg_manager.config.EPSILON_BB,
+                cfg_manager.config.EPSILON_AB, cfg_manager.config.cutoff,
+                cfg_manager.config.MASS_A, cfg_manager.config.MASS_B, periodic_y);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    const PistonWallObservables obs = evaluate_piston_wall_observables(
+            /*update_particle_acc=*/true);
+    nph_piston_force = obs.upper_force;
+}
+
 void MDSimulation::step_single_NVE() {
+    piston_mode_active = false;
+
     const double dt = cfg_manager.config.dt;
 
     int threads = cfg_manager.config.THREADS_PER_BLOCK;
@@ -1603,6 +1637,8 @@ void MDSimulation::step_single_NVE() {
 }
 
 void MDSimulation::step_single_nose_hoover(bool do_middle_wrap) {
+    piston_mode_active = false;
+
     MPI_Barrier(comm);
     const double dt = cfg_manager.config.dt;
 
@@ -1741,7 +1777,23 @@ void MDSimulation::init_nph_state_if_needed() {
     nph_state_initialized = true;
 }
 
+void MDSimulation::init_nph_piston_state_if_needed() {
+    if (!nph_piston_velocity_initialized) {
+        nph_piston_velocity = 0.0;
+        nph_piston_velocity_initialized = true;
+    }
+
+    if (!piston_mode_active) {
+        piston_mode_active = true;
+        cal_forces_piston();
+
+        const double Lx = cfg_manager.config.box_w_global;
+        last_instant_pressure = (Lx > 0.0) ? (nph_piston_force / Lx) : 0.0;
+    }
+}
+
 void MDSimulation::step_single_NPH(double pressure_ext) {
+    piston_mode_active = false;
     init_nph_state_if_needed();
 
     const double dt = cfg_manager.config.dt;
@@ -1865,11 +1917,118 @@ void MDSimulation::step_single_NPH(double pressure_ext) {
     t += dt;
 }
 
+void MDSimulation::step_single_NPH_piston(double pressure_ext) {
+    init_nph_piston_state_if_needed();
+
+    const double dt = cfg_manager.config.dt;
+    const double W = std::max(cfg_manager.config.barostat_mass, 1e-12);
+
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
+    int n_local = cfg_manager.config.n_local;
+    const int n_cap = cfg_manager.config.n_cap;
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                   "[step_single_NPH_piston] rank {} n_local={} exceeds n_cap={} before step.\n",
+                   cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
+
+    const double Lx = cfg_manager.config.box_w_global;
+    const double Ly_old = cfg_manager.config.box_h_global;
+    if (Lx <= 0.0 || Ly_old <= 0.0) {
+        fmt::print(stderr,
+                   "[step_single_NPH_piston] invalid box Lx={}, Ly={}\n", Lx,
+                   Ly_old);
+        MPI_Abort(comm, 1);
+    }
+
+    const double piston_force_old = nph_piston_force;
+    const double piston_acc_old = (piston_force_old - pressure_ext * Lx) / W;
+
+    if (n_local > 0) {
+        const int blocks = (n_local + threads - 1) / threads;
+        step_half_vv_piston_kernel<<<blocks, threads>>>(
+                thrust::raw_pointer_cast(d_particles.data()), n_local, dt, Lx);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    nph_piston_velocity += 0.5 * dt * piston_acc_old;
+
+    double Ly_new = Ly_old + dt * nph_piston_velocity;
+    const double Ly_floor =
+            std::max(1e-12, cfg_manager.config.barostat_height_min_ratio * Ly0);
+    const double Ly_ceiling = std::max(
+            Ly_floor, cfg_manager.config.barostat_height_max_ratio * Ly0);
+    bool clamped_to_bounds = false;
+
+    if (Ly_new < Ly_floor) {
+        Ly_new = Ly_floor;
+        clamped_to_bounds = true;
+        if (nph_piston_velocity < 0.0) {
+            nph_piston_velocity = 0.0;
+        }
+    } else if (Ly_new > Ly_ceiling) {
+        Ly_new = Ly_ceiling;
+        clamped_to_bounds = true;
+        if (nph_piston_velocity > 0.0) {
+            nph_piston_velocity = 0.0;
+        }
+    }
+
+    set_box_dimensions(Lx, Ly_new);
+
+    update_d_particles();
+    update_halo();
+
+    n_local = cfg_manager.config.n_local;
+    if (n_local > n_cap) {
+        fmt::print(stderr,
+                   "[step_single_NPH_piston] rank {} n_local={} exceeds n_cap={} after exchange.\n",
+                   cfg_manager.config.rank_idx, n_local, n_cap);
+        MPI_Abort(comm, 1);
+    }
+
+    cal_forces_piston();
+
+    if (n_local > 0) {
+        const int blocks = (n_local + threads - 1) / threads;
+        step_2nd_half_vv_kernel<<<blocks, threads>>>(
+                thrust::raw_pointer_cast(d_particles.data()), n_local, dt);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    const double piston_acc_new =
+            (nph_piston_force - pressure_ext * Lx) / W;
+    nph_piston_velocity += 0.5 * dt * piston_acc_new;
+
+    if (clamped_to_bounds) {
+        if (cfg_manager.config.box_h_global <= Ly_floor &&
+            nph_piston_velocity < 0.0) {
+            nph_piston_velocity = 0.0;
+        }
+        if (cfg_manager.config.box_h_global >= Ly_ceiling &&
+            nph_piston_velocity > 0.0) {
+            nph_piston_velocity = 0.0;
+        }
+    }
+
+    last_instant_pressure = nph_piston_force / Lx;
+    t += dt;
+}
+
 // ABP (Active Brownian Particle) overdamped integration step
 // Implements Euler-Maruyama for: θ^{n+1} = θ^n + √(2·D_θ·Δt)·ξ
 //                                 v = μ·F + v0·û + √(2·D_r·Δt)·η
 //                                 r^{n+1} = r^n + Δt·v
 void MDSimulation::step_single_ABP(bool do_middle_wrap) {
+    piston_mode_active = false;
+
     MPI_Barrier(comm);
 
     int threads = cfg_manager.config.THREADS_PER_BLOCK;
@@ -1986,6 +2145,63 @@ double MDSimulation::cal_total_K() {
     return K_global;
 }
 
+MDSimulation::PistonWallObservables
+MDSimulation::evaluate_piston_wall_observables(bool update_particle_acc) {
+    int threads = cfg_manager.config.THREADS_PER_BLOCK;
+    if (threads <= 0) {
+        threads = 256;
+    }
+
+    const int n_local = cfg_manager.config.n_local;
+    const double k_piston = cfg_manager.config.k_piston;
+    double local_upper_force = 0.0;
+    double local_wall_energy = 0.0;
+
+    if (n_local > 0 && k_piston > 0.0) {
+        const int blocks = (n_local + threads - 1) / threads;
+        thrust::device_vector<double> d_partial_upper_force(blocks);
+        thrust::device_vector<double> d_partial_wall_energy(blocks);
+
+        piston_wall_kernel<<<blocks, threads,
+                             2 * threads * static_cast<int>(sizeof(double))>>>(
+                thrust::raw_pointer_cast(d_particles.data()), n_local,
+                cfg_manager.config.box_h_global, k_piston, cfg_manager.config.MASS_A,
+                cfg_manager.config.MASS_B, update_particle_acc,
+                thrust::raw_pointer_cast(d_partial_upper_force.data()),
+                thrust::raw_pointer_cast(d_partial_wall_energy.data()));
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        std::vector<double> h_partial_upper_force(static_cast<std::size_t>(blocks));
+        std::vector<double> h_partial_wall_energy(static_cast<std::size_t>(blocks));
+
+        CUDA_CHECK(cudaMemcpy(
+                h_partial_upper_force.data(),
+                thrust::raw_pointer_cast(d_partial_upper_force.data()),
+                static_cast<size_t>(blocks) * sizeof(double),
+                cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(
+                h_partial_wall_energy.data(),
+                thrust::raw_pointer_cast(d_partial_wall_energy.data()),
+                static_cast<size_t>(blocks) * sizeof(double),
+                cudaMemcpyDeviceToHost));
+
+        for (double value : h_partial_upper_force) {
+            local_upper_force += value;
+        }
+        for (double value : h_partial_wall_energy) {
+            local_wall_energy += value;
+        }
+    }
+
+    PistonWallObservables global_obs{};
+    MPI_Allreduce(&local_upper_force, &global_obs.upper_force, 1, MPI_DOUBLE,
+                  MPI_SUM, comm);
+    MPI_Allreduce(&local_wall_energy, &global_obs.wall_energy, 1, MPI_DOUBLE,
+                  MPI_SUM, comm);
+    return global_obs;
+}
+
 double MDSimulation::cal_total_scalar_pressure(int periodic_y) {
     int threads = cfg_manager.config.THREADS_PER_BLOCK;
     if (threads <= 0) {
@@ -2036,6 +2252,15 @@ double MDSimulation::cal_total_scalar_pressure(int periodic_y) {
 }
 
 double MDSimulation::cal_instant_pressure() {
+    if (piston_mode_active) {
+        const PistonWallObservables obs =
+                evaluate_piston_wall_observables(/*update_particle_acc=*/false);
+        nph_piston_force = obs.upper_force;
+        const double Lx = cfg_manager.config.box_w_global;
+        last_instant_pressure = (Lx > 0.0) ? (nph_piston_force / Lx) : 0.0;
+        return last_instant_pressure;
+    }
+
     last_instant_pressure = cal_total_scalar_pressure(/*periodic_y=*/1);
     return last_instant_pressure;
 }
@@ -2077,7 +2302,7 @@ double MDSimulation::compute_kinetic_energy_local() {
     return K_local;
 }
 
-double MDSimulation::compute_U_energy_local() {
+double MDSimulation::compute_U_energy_local(int periodic_y) {
     const int threads = cfg_manager.config.THREADS_PER_BLOCK;
     const int n_local = cfg_manager.config.n_local;
     const int n_left = cfg_manager.config.n_halo_left;
@@ -2088,8 +2313,6 @@ double MDSimulation::compute_U_energy_local() {
     }
 
     const int blocks = (n_local + threads - 1) / threads;
-    const int periodic_y = 1;
-
     // per-block partial sums on device
     thrust::device_vector<double> d_partial(blocks);
 
@@ -2122,10 +2345,18 @@ double MDSimulation::compute_U_energy_local() {
 }
 
 double MDSimulation::cal_total_U() {
-    const double U_local = compute_U_energy_local();
+    const int periodic_y = piston_mode_active ? 0 : 1;
+    const double U_local = compute_U_energy_local(periodic_y);
     double U_global = 0.0;
     MPI_Allreduce(&U_local, &U_global, 1, MPI_DOUBLE, MPI_SUM, comm);
-    return U_global;
+
+    if (!piston_mode_active) {
+        return U_global;
+    }
+
+    const PistonWallObservables obs =
+            evaluate_piston_wall_observables(/*update_particle_acc=*/false);
+    return U_global + obs.wall_energy;
 }
 
 double MDSimulation::cal_partial_U_lambda(double epsilon_lambda) {
@@ -2135,7 +2366,7 @@ double MDSimulation::cal_partial_U_lambda(double epsilon_lambda) {
     const int n_right = cfg_manager.config.n_halo_right;
 
     double local_sum = 0.0;
-    const int periodic_y = 1;
+    const int periodic_y = piston_mode_active ? 0 : 1;
 
     if (n_local > 0) {
         const int blocks = (n_local + threads - 1) / threads;

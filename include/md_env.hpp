@@ -80,10 +80,13 @@ public:
     void step_single_NVE();
     void step_single_nose_hoover(bool do_middle_wrap = false);
     void step_single_NPH(double pressure_ext);
+    void step_single_NPH_piston(double pressure_ext);
     void step_single_ABP(bool do_middle_wrap = false); // ABP overdamped dynamics with self-propulsion
     double cal_instant_pressure();
     double get_last_instant_pressure() const { return last_instant_pressure; }
     double get_nph_area_rate() const;
+    double get_nph_piston_velocity() const { return nph_piston_velocity; }
+    double get_nph_piston_force() const { return nph_piston_force; }
 
     bool check_eqlibrium(double sensitivity);
 
@@ -209,6 +212,15 @@ private:
     double nph_area_momentum = 0.0;
     double nph_aspect_ratio = 1.0;
     bool nph_state_initialized = false;
+    double nph_piston_velocity = 0.0;
+    double nph_piston_force = 0.0;
+    bool nph_piston_velocity_initialized = false;
+    bool piston_mode_active = false;
+
+    struct PistonWallObservables {
+        double upper_force = 0.0;
+        double wall_energy = 0.0;
+    };
 
     void broadcast_params();
     void allocate_memory();
@@ -221,10 +233,14 @@ private:
     void update_d_particles(); // use only d_particles to update particles through
                                                          // particle exchange between ranks
     void cal_forces();         // update force and store into d_particles
+    void cal_forces_piston();  // x-PBC LJ + soft walls in y
     double cal_total_scalar_pressure(int periodic_y);
     void set_box_dimensions(double Lx_new, double Ly_new);
     void init_nph_state_if_needed();
-    double compute_U_energy_local();
+    void init_nph_piston_state_if_needed();
+    PistonWallObservables
+    evaluate_piston_wall_observables(bool update_particle_acc);
+    double compute_U_energy_local(int periodic_y);
     std::vector<std::vector<double>>
     compute_interface_paths(int n_grid_y, double smoothing_sigma);
     std::vector<std::vector<double>>

@@ -18,6 +18,7 @@
     "barostat_height_max_ratio": 1.4,
     "barostat_height_min_ratio": 0.6,
     "barostat_mass": 10000.0,
+    "k_piston": 100.0,
     "box_h_global": 23.851391759997757,
     "box_w_global": 143.10835055998655,
     "cutoff": 2.5,

@@ -45,6 +45,7 @@ struct MDConfig {
 
     // Periodic-box NPH barostat controls.
     double barostat_mass = 1.0e4;
+    double k_piston = 100.0;
     double barostat_area_rate_init = 0.0;
     double barostat_height_min_ratio = 0.6;
     double barostat_height_max_ratio = 1.4;

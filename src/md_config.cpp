@@ -87,6 +87,7 @@ void load_from_json_object(const json &j, MDConfig &cfg) {
 
     // Periodic-box NPH barostat controls
     cfg.barostat_mass = j.value("barostat_mass", defaults.barostat_mass);
+    cfg.k_piston = j.value("k_piston", defaults.k_piston);
     cfg.barostat_area_rate_init =
             j.value("barostat_area_rate_init", defaults.barostat_area_rate_init);
     cfg.barostat_height_min_ratio = j.value(
@@ -168,6 +169,7 @@ void store_to_json_object(json &j, const MDConfig &cfg) {
 
     // Periodic-box NPH barostat controls
     j["barostat_mass"] = cfg.barostat_mass;
+    j["k_piston"] = cfg.k_piston;
     j["barostat_area_rate_init"] = cfg.barostat_area_rate_init;
     j["barostat_height_min_ratio"] = cfg.barostat_height_min_ratio;
     j["barostat_height_max_ratio"] = cfg.barostat_height_max_ratio;
@@ -258,6 +260,7 @@ void MDConfigManager::print_config() {
 
     fmt::print("NPH barostat controls:\n"
                "  barostat_mass: {}\n"
+               "  k_piston: {}\n"
                "  barostat_area_rate_init: {}\n"
                "  barostat_height_min_ratio: {}\n"
                "  barostat_height_max_ratio: {}\n"
@@ -271,7 +274,8 @@ void MDConfigManager::print_config() {
                "  nph_warmup_min_steps: {}\n"
                "  nph_warmup_max_steps: {}\n"
                "  nph_steps: {}\n",
-               config.barostat_mass, config.barostat_area_rate_init,
+               config.barostat_mass, config.k_piston,
+               config.barostat_area_rate_init,
                config.barostat_height_min_ratio, config.barostat_height_max_ratio,
                config.pressure_target_mode, config.P_target,
                config.pressure_target_auto_steps, config.pressure_eval_interval_steps,
@@ -421,6 +425,8 @@ bool MDConfigManager::apply_override(const std::string &key,
     // Periodic-box NPH barostat controls
     if (key == "barostat_mass")
         return assign_numeric(config.barostat_mass);
+    if (key == "k_piston")
+        return assign_numeric(config.k_piston);
     if (key == "barostat_area_rate_init")
         return assign_numeric(config.barostat_area_rate_init);
     if (key == "barostat_height_min_ratio")
