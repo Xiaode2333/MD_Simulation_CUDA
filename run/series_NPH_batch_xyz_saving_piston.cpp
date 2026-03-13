@@ -191,17 +191,26 @@ int main(int argc, char **argv) {
     cfg_nph.config.rank_size = rank_size;
     cfg_nph.config.rank_idx = rank_idx;
 
+    const int pressure_eval_interval =
+            std::max(1, cfg_base.config.pressure_eval_interval_steps);
     const int nvt_snapshot_interval = std::max(
             1, static_cast<int>(std::llround(kSnapshotDt / kNvtDt)));
     const int nph_snapshot_interval = std::max(
             1, static_cast<int>(std::llround(kSnapshotDt / kNphDt)));
 
     const fs::path base_dir = fs::path(options.base_dir);
+    const fs::path config_dir = base_dir / "configs";
+    const fs::path saved_cfg_path =
+            config_dir / fs::path(options.ori_config).filename();
+    const fs::path cfg_nvt_path = config_dir / "config_nvt.json";
+    const fs::path cfg_nph_path = config_dir / "config_nph_piston.json";
     const fs::path xyz_file = base_dir / "trajectory_piston.xyz";
     const fs::path restart_file = base_dir / "nvt_restart_piston.bin";
 
-    if (!create_folder(base_dir, rank_idx)) {
-        MPI_Abort(MPI_COMM_WORLD, 3);
+    for (const auto &dir : {base_dir, config_dir}) {
+        if (!create_folder(dir, rank_idx)) {
+            MPI_Abort(MPI_COMM_WORLD, 3);
+        }
     }
 
     if (rank_idx == 0) {
@@ -216,6 +225,8 @@ int main(int argc, char **argv) {
                     xyz_file.string());
             MPI_Abort(MPI_COMM_WORLD, 4);
         }
+
+        cfg_nvt.config_to_json(cfg_nvt_path.string());
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
@@ -224,6 +235,8 @@ int main(int argc, char **argv) {
     double global_time = 0.0;
     int nvt_saved_snapshots = 0;
     int nph_saved_snapshots = 0;
+    double nvt_pressure_sum = 0.0;
+    int nvt_pressure_samples = 0;
 
     {
         MDSimulation sim(cfg_nvt, MPI_COMM_WORLD);
@@ -233,6 +246,22 @@ int main(int argc, char **argv) {
 
             ++global_step;
             global_time += kNvtDt;
+
+            const bool do_pressure_sample =
+                    (phase_step % pressure_eval_interval == 0) ||
+                    (phase_step == kNvtSteps);
+            if (do_pressure_sample) {
+                const double pressure = sim.cal_instant_pressure();
+                if (!std::isfinite(pressure)) {
+                    fmt::print(
+                            stderr,
+                            "[run_series_NPH_batch_xyz_saving_piston] Non-finite NVT pressure at step {}.\n",
+                            phase_step);
+                    MPI_Abort(MPI_COMM_WORLD, 5);
+                }
+                nvt_pressure_sum += pressure;
+                ++nvt_pressure_samples;
+            }
 
             const bool do_snapshot = (phase_step % nvt_snapshot_interval == 0);
             if (!do_snapshot) {
@@ -256,7 +285,7 @@ int main(int argc, char **argv) {
 
             MPI_Bcast(&snapshot_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
             if (!snapshot_ok) {
-                MPI_Abort(MPI_COMM_WORLD, 5);
+                MPI_Abort(MPI_COMM_WORLD, 6);
             }
 
             ++nvt_saved_snapshots;
@@ -267,7 +296,33 @@ int main(int argc, char **argv) {
 
     MPI_Barrier(MPI_COMM_WORLD);
 
+    if (nvt_pressure_samples <= 0) {
+        if (rank_idx == 0) {
+            fmt::print(
+                    stderr,
+                    "[run_series_NPH_batch_xyz_saving_piston] Failed to collect NVT pressure samples over {:.6f} time units.\n",
+                    kNvtSteps * kNvtDt);
+        }
+        MPI_Abort(MPI_COMM_WORLD, 7);
+    }
+
+    const double pressure_target_from_nvt =
+            nvt_pressure_sum / static_cast<double>(nvt_pressure_samples);
+    cfg_nph.config.P_target = pressure_target_from_nvt;
+    cfg_nph.config.pressure_target_mode = "fixed_from_initial_nvt";
+
     const int nvt_restart_frame = global_step;
+
+    if (rank_idx == 0) {
+        cfg_nph.config_to_json(saved_cfg_path.string());
+        cfg_nph.config_to_json(cfg_nph_path.string());
+
+        fmt::print(
+                "[run_series_NPH_batch_xyz_saving_piston] Using P_target={:.10e} from {} NVT pressure samples collected over {:.6f} time units.\n",
+                cfg_nph.config.P_target, nvt_pressure_samples, kNvtSteps * kNvtDt);
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
 
     {
         MDSimulation sim(cfg_nph, MPI_COMM_WORLD, restart_file.string(),
@@ -301,7 +356,7 @@ int main(int argc, char **argv) {
 
             MPI_Bcast(&snapshot_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
             if (!snapshot_ok) {
-                MPI_Abort(MPI_COMM_WORLD, 6);
+                MPI_Abort(MPI_COMM_WORLD, 8);
             }
 
             ++nph_saved_snapshots;
@@ -316,9 +371,10 @@ int main(int argc, char **argv) {
 
         fmt::print(
                 "[run_series_NPH_batch_xyz_saving_piston] Done. NVT snapshots={}, "
-                "NPH_PISTON snapshots={}, final_step={}, final_time={:.6f}, "
+                "NPH_PISTON snapshots={}, P_target={:.10e}, final_step={}, final_time={:.6f}, "
                 "snapshot_dt={:.6f}\n",
-                nvt_saved_snapshots, nph_saved_snapshots, global_step,
+                nvt_saved_snapshots, nph_saved_snapshots, cfg_nph.config.P_target,
+                global_step,
                 global_time, kSnapshotDt);
     }
 

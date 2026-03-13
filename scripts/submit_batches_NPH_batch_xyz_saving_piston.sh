@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_ROOT="./results/20260311_NPH_batch_xyz_saving_piston"
+BASE_ROOT="./results/20260313_NPH_batch_xyz_saving_piston"
 ORI_CONFIG="./tests/run_NPH_test_piston/config_large_piston.json"
 
 EXTRA_OVERRIDES=("$@")
@@ -11,7 +11,7 @@ FIXED_OVERRIDES=(
     "Dbox_w_global=374.7456"
     "Dn_particles_global=16384"
     "Dn_particles_type0=8192"
-    "Dbarostat_mass=16384"
+    "Dbarostat_mass=16384.0"
 )
 
 mkdir -p "$BASE_ROOT"

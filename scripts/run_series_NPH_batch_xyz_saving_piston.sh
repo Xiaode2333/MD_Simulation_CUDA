@@ -50,6 +50,8 @@ BASE_DIR="${BASE_ROOT}/T=${T_VALUE}"
 mkdir -p -- "$BASE_DIR"
 CONFIGS_DIR="${BASE_DIR}/configs"
 mkdir -p -- "$CONFIGS_DIR"
+ORI_CONFIG_NAME="$(basename "$ORI_CONFIG")"
+ORI_CONFIG_STEM="${ORI_CONFIG_NAME%.json}"
 
 if ! type module >/dev/null 2>&1; then
     if [ -r /etc/profile.d/modules.sh ]; then
@@ -116,22 +118,32 @@ cat > "${BASE_DIR}/version.json" <<EOF_JSON
 }
 EOF_JSON
 
-cp -f -- "$ORI_CONFIG" "${CONFIGS_DIR}/$(basename "$ORI_CONFIG")"
+cp -f -- "$ORI_CONFIG" "${CONFIGS_DIR}/${ORI_CONFIG_STEM}.input.json"
 
 override_cli=()
 override_cli+=("--DT_init=${T_VALUE}")
 override_cli+=("--DT_target=${T_VALUE}")
+has_barostat_mass_override=0
 
 for override in "$@"; do
     if [ -z "$override" ]; then
         continue
     fi
+    case "$override" in
+        Dbarostat_mass=*|--Dbarostat_mass=*)
+            has_barostat_mass_override=1
+            ;;
+    esac
     if [[ "$override" == --* ]]; then
         override_cli+=("$override")
     else
         override_cli+=("--${override}")
     fi
 done
+
+if [ "$has_barostat_mass_override" -eq 0 ]; then
+    override_cli+=("--Dbarostat_mass=16384.0")
+fi
 
 echo "Launching run_series_NPH_batch_xyz_saving_piston for T=${T_VALUE} with base dir '${BASE_DIR}'."
 srun --cpu-bind=none "$SERIES_BIN" --base-dir "$BASE_DIR" --ori-config "$ORI_CONFIG" "${override_cli[@]}"
