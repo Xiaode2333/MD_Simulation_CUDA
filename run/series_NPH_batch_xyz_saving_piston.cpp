@@ -210,8 +210,6 @@ int main(int argc, char **argv) {
     const fs::path frame_csv_dir = frame_dir / "csv";
     const fs::path nvt_plot_csv = frame_csv_dir / "nvt_plot_input.csv";
     const fs::path nph_plot_csv = frame_csv_dir / "nph_piston_plot_input.csv";
-    const fs::path saved_cfg_path =
-            config_dir / fs::path(options.ori_config).filename();
     const fs::path cfg_nvt_path = config_dir / "config_nvt.json";
     const fs::path cfg_nph_path = config_dir / "config_nph_piston.json";
     const fs::path xyz_file = base_dir / "trajectory_piston.xyz";
@@ -359,7 +357,6 @@ int main(int argc, char **argv) {
     const int nvt_restart_frame = global_step;
 
     if (rank_idx == 0) {
-        cfg_nph.config_to_json(saved_cfg_path.string());
         cfg_nph.config_to_json(cfg_nph_path.string());
 
         fmt::print(

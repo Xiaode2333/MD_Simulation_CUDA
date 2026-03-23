@@ -200,6 +200,9 @@ int main(int argc, char **argv) {
     const int nph_plot_interval = std::max(1, kNphSteps / kNphPlots);
 
     const fs::path base_dir = fs::path(options.base_dir);
+    const fs::path config_dir = base_dir / "configs";
+    const fs::path cfg_nvt_path = config_dir / "config_nvt.json";
+    const fs::path cfg_nph_path = config_dir / "config_nph.json";
     const fs::path frame_dir = base_dir / "frames";
     const fs::path frame_nvt_dir = frame_dir / "NVT";
     const fs::path frame_nph_dir = frame_dir / "NPH";
@@ -210,7 +213,8 @@ int main(int argc, char **argv) {
     const fs::path restart_file = base_dir / "nvt_restart.bin";
 
     for (const auto &dir :
-         {base_dir, frame_dir, frame_nvt_dir, frame_nph_dir, frame_csv_dir}) {
+         {base_dir, config_dir, frame_dir, frame_nvt_dir, frame_nph_dir,
+          frame_csv_dir}) {
         if (!create_folder(dir, rank_idx)) {
             MPI_Abort(MPI_COMM_WORLD, 3);
         }
@@ -232,6 +236,8 @@ int main(int argc, char **argv) {
                        base_dir.string());
             MPI_Abort(MPI_COMM_WORLD, 4);
         }
+
+        cfg_nvt.config_to_json(cfg_nvt_path.string());
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
@@ -314,6 +320,10 @@ int main(int argc, char **argv) {
     MPI_Barrier(MPI_COMM_WORLD);
 
     const int nvt_restart_frame = global_step;
+
+    if (rank_idx == 0) {
+        cfg_nph.config_to_json(cfg_nph_path.string());
+    }
 
     {
         MDSimulation sim(cfg_nph, MPI_COMM_WORLD, restart_file.string(),

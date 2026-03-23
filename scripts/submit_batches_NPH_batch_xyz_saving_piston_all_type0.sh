@@ -11,6 +11,7 @@ FIXED_OVERRIDES=(
     "Dbox_w_global=374.7456"
     "Dn_particles_global=16384"
     "Dn_particles_type0=16384"
+    "Ddevide_p=1"
     "Dbarostat_mass=16384.0"
 )
 

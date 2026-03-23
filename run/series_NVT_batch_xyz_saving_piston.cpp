@@ -205,6 +205,7 @@ int main(int argc, char **argv) {
             std::max(1, kPhase500Steps / kPhase500Plots);
 
     const fs::path base_dir = fs::path(options.base_dir);
+    const fs::path config_dir = base_dir / "configs";
     const fs::path frame_dir = base_dir / "frames";
     const fs::path frame_phase100_dir = frame_dir / "NVT_100";
     const fs::path frame_phase500_dir = frame_dir / "NVT_500";
@@ -213,12 +214,12 @@ int main(int argc, char **argv) {
     const fs::path phase500_plot_csv = frame_csv_dir / "nvt_500_plot_input.csv";
     const fs::path xyz_file = base_dir / "trajectory_nvt.xyz";
     const fs::path restart_file = base_dir / "nvt_100_restart.bin";
-    const fs::path cfg_phase100_path = base_dir / "config_nvt_100.json";
-    const fs::path cfg_phase500_path = base_dir / "config_nvt_500.json";
+    const fs::path cfg_phase100_path = config_dir / "config_nvt_100.json";
+    const fs::path cfg_phase500_path = config_dir / "config_nvt_500.json";
 
     for (const auto &dir :
-         {base_dir, frame_dir, frame_phase100_dir, frame_phase500_dir,
-          frame_csv_dir}) {
+         {base_dir, config_dir, frame_dir, frame_phase100_dir,
+          frame_phase500_dir, frame_csv_dir}) {
         if (!create_folder(dir, rank_idx)) {
             MPI_Abort(MPI_COMM_WORLD, 3);
         }

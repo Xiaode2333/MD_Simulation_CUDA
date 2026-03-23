@@ -116,7 +116,9 @@ cat > "${BASE_DIR}/version.json" <<EOF_JSON
 }
 EOF_JSON
 
-cp -f -- "$ORI_CONFIG" "${CONFIGS_DIR}/$(basename "$ORI_CONFIG")"
+ORI_CONFIG_NAME="$(basename "$ORI_CONFIG")"
+ORI_CONFIG_STEM="${ORI_CONFIG_NAME%.json}"
+cp -f -- "$ORI_CONFIG" "${CONFIGS_DIR}/${ORI_CONFIG_STEM}.input.json"
 
 override_cli=()
 override_cli+=("--DT_init=${T_VALUE}")
