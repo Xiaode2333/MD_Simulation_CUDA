@@ -147,6 +147,8 @@ int main(int argc, char **argv) {
     constexpr int kNvtSteps = 100000;
     constexpr int kNphSteps = 5000000;
     constexpr double kSnapshotDt = 1.0e-1;
+    constexpr int kNvtPlots = 20;
+    constexpr int kNphPlots = 20;
 
     ProgramOptions options;
     try {
@@ -190,17 +192,28 @@ int main(int argc, char **argv) {
     cfg_nph.config.rank_size = rank_size;
     cfg_nph.config.rank_idx = rank_idx;
 
-    const int nvt_snapshot_interval = std::max(
+    const int nvt_xyz_interval = std::max(
             1, static_cast<int>(std::llround(kSnapshotDt / kNvtDt)));
-    const int nph_snapshot_interval = std::max(
+    const int nph_xyz_interval = std::max(
             1, static_cast<int>(std::llround(kSnapshotDt / kNphDt)));
+    const int nvt_plot_interval = std::max(1, kNvtSteps / kNvtPlots);
+    const int nph_plot_interval = std::max(1, kNphSteps / kNphPlots);
 
     const fs::path base_dir = fs::path(options.base_dir);
+    const fs::path frame_dir = base_dir / "frames";
+    const fs::path frame_nvt_dir = frame_dir / "NVT";
+    const fs::path frame_nph_dir = frame_dir / "NPH";
+    const fs::path frame_csv_dir = frame_dir / "csv";
+    const fs::path nvt_plot_csv = frame_csv_dir / "nvt_plot_input.csv";
+    const fs::path nph_plot_csv = frame_csv_dir / "nph_plot_input.csv";
     const fs::path xyz_file = base_dir / "trajectory.xyz";
     const fs::path restart_file = base_dir / "nvt_restart.bin";
 
-    if (!create_folder(base_dir, rank_idx)) {
-        MPI_Abort(MPI_COMM_WORLD, 3);
+    for (const auto &dir :
+         {base_dir, frame_dir, frame_nvt_dir, frame_nph_dir, frame_csv_dir}) {
+        if (!create_folder(dir, rank_idx)) {
+            MPI_Abort(MPI_COMM_WORLD, 3);
+        }
     }
 
     if (rank_idx == 0) {
@@ -208,11 +221,15 @@ int main(int argc, char **argv) {
         fs::remove(restart_file, rm_ec);
 
         std::ofstream clear_xyz(xyz_file, std::ios::out | std::ios::trunc);
-        if (!clear_xyz) {
+        std::ofstream clear_nvt_plot_csv(nvt_plot_csv,
+                                         std::ios::out | std::ios::trunc);
+        std::ofstream clear_nph_plot_csv(nph_plot_csv,
+                                         std::ios::out | std::ios::trunc);
+        if (!clear_xyz || !clear_nvt_plot_csv || !clear_nph_plot_csv) {
             fmt::print(stderr,
                        "[run_series_NPH_batch_xyz_saving] Failed to initialize "
-                       "{}.\n",
-                       xyz_file.string());
+                       "outputs in {}.\n",
+                       base_dir.string());
             MPI_Abort(MPI_COMM_WORLD, 4);
         }
     }
@@ -221,8 +238,10 @@ int main(int argc, char **argv) {
 
     int global_step = 0;
     double global_time = 0.0;
-    int nvt_saved_snapshots = 0;
-    int nph_saved_snapshots = 0;
+    int nvt_saved_xyz = 0;
+    int nph_saved_xyz = 0;
+    int nvt_saved_plots = 0;
+    int nph_saved_plots = 0;
 
     {
         MDSimulation sim(cfg_nvt, MPI_COMM_WORLD);
@@ -233,32 +252,60 @@ int main(int argc, char **argv) {
             ++global_step;
             global_time += kNvtDt;
 
-            const bool do_snapshot = (phase_step % nvt_snapshot_interval == 0);
-            if (!do_snapshot) {
+            const bool do_xyz = (phase_step % nvt_xyz_interval == 0);
+            const bool do_plot = (phase_step % nvt_plot_interval == 0);
+            if (!do_xyz && !do_plot) {
                 continue;
             }
 
             sim.sample_collect();
 
-            int snapshot_ok = 1;
+            int output_ok = 1;
             if (rank_idx == 0) {
                 std::vector<Particle> frame_particles;
                 sim.get_host_particles(frame_particles);
-                const double phase_time = static_cast<double>(phase_step) * kNvtDt;
-                snapshot_ok = append_xyz_snapshot(
-                                      xyz_file, frame_particles, Phase::NVT,
-                                      global_step, phase_step, global_time,
-                                      phase_time, sim.get_Lx(), sim.get_Ly())
-                                      ? 1
-                                      : 0;
+
+                if (do_xyz) {
+                    const double phase_time =
+                            static_cast<double>(phase_step) * kNvtDt;
+                    output_ok = append_xyz_snapshot(
+                                        xyz_file, frame_particles, Phase::NVT,
+                                        global_step, phase_step, global_time,
+                                        phase_time, sim.get_Lx(), sim.get_Ly())
+                                        ? 1
+                                        : 0;
+                    if (output_ok) {
+                        ++nvt_saved_xyz;
+                    }
+                }
+
+                if (output_ok && do_plot) {
+                    const int plot_idx = nvt_saved_plots + 1;
+                    const fs::path frame_svg =
+                            frame_nvt_dir /
+                            fmt::format("snapshot_{:02d}_step_{}.svg", plot_idx,
+                                        global_step);
+                    try {
+                        plot_particles_python(
+                                frame_particles, frame_svg.string(),
+                                nvt_plot_csv.string(), sim.get_Lx(),
+                                sim.get_Ly(), cfg_base.config.SIGMA_AA,
+                                cfg_base.config.SIGMA_BB);
+                        nvt_saved_plots = plot_idx;
+                    } catch (const std::exception &e) {
+                        fmt::print(
+                                stderr,
+                                "[run_series_NPH_batch_xyz_saving] Failed to plot NVT frame at step {}: {}\n",
+                                global_step, e.what());
+                        output_ok = 0;
+                    }
+                }
             }
 
-            MPI_Bcast(&snapshot_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            if (!snapshot_ok) {
+            MPI_Bcast(&output_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            if (!output_ok) {
                 MPI_Abort(MPI_COMM_WORLD, 5);
             }
-
-            ++nvt_saved_snapshots;
         }
 
         sim.save_env(restart_file.string(), global_step);
@@ -278,32 +325,60 @@ int main(int argc, char **argv) {
             ++global_step;
             global_time += kNphDt;
 
-            const bool do_snapshot = (phase_step % nph_snapshot_interval == 0);
-            if (!do_snapshot) {
+            const bool do_xyz = (phase_step % nph_xyz_interval == 0);
+            const bool do_plot = (phase_step % nph_plot_interval == 0);
+            if (!do_xyz && !do_plot) {
                 continue;
             }
 
             sim.sample_collect();
 
-            int snapshot_ok = 1;
+            int output_ok = 1;
             if (rank_idx == 0) {
                 std::vector<Particle> frame_particles;
                 sim.get_host_particles(frame_particles);
-                const double phase_time = static_cast<double>(phase_step) * kNphDt;
-                snapshot_ok = append_xyz_snapshot(
-                                      xyz_file, frame_particles, Phase::NPH,
-                                      global_step, phase_step, global_time,
-                                      phase_time, sim.get_Lx(), sim.get_Ly())
-                                      ? 1
-                                      : 0;
+
+                if (do_xyz) {
+                    const double phase_time =
+                            static_cast<double>(phase_step) * kNphDt;
+                    output_ok = append_xyz_snapshot(
+                                        xyz_file, frame_particles, Phase::NPH,
+                                        global_step, phase_step, global_time,
+                                        phase_time, sim.get_Lx(), sim.get_Ly())
+                                        ? 1
+                                        : 0;
+                    if (output_ok) {
+                        ++nph_saved_xyz;
+                    }
+                }
+
+                if (output_ok && do_plot) {
+                    const int plot_idx = nph_saved_plots + 1;
+                    const fs::path frame_svg =
+                            frame_nph_dir /
+                            fmt::format("snapshot_{:02d}_step_{}.svg", plot_idx,
+                                        global_step);
+                    try {
+                        plot_particles_python(
+                                frame_particles, frame_svg.string(),
+                                nph_plot_csv.string(), sim.get_Lx(),
+                                sim.get_Ly(), cfg_base.config.SIGMA_AA,
+                                cfg_base.config.SIGMA_BB);
+                        nph_saved_plots = plot_idx;
+                    } catch (const std::exception &e) {
+                        fmt::print(
+                                stderr,
+                                "[run_series_NPH_batch_xyz_saving] Failed to plot NPH frame at step {}: {}\n",
+                                global_step, e.what());
+                        output_ok = 0;
+                    }
+                }
             }
 
-            MPI_Bcast(&snapshot_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            if (!snapshot_ok) {
+            MPI_Bcast(&output_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            if (!output_ok) {
                 MPI_Abort(MPI_COMM_WORLD, 6);
             }
-
-            ++nph_saved_snapshots;
         }
     }
 
@@ -314,11 +389,12 @@ int main(int argc, char **argv) {
         fs::remove(restart_file, rm_ec);
 
         fmt::print(
-                "[run_series_NPH_batch_xyz_saving] Done. NVT snapshots={}, "
-                "NPH snapshots={}, final_step={}, final_time={:.6f}, "
-                "snapshot_dt={:.6f}\n",
-                nvt_saved_snapshots, nph_saved_snapshots, global_step,
-                global_time, kSnapshotDt);
+                "[run_series_NPH_batch_xyz_saving] Done. NVT xyz={}, NPH xyz={}, "
+                "NVT plots={} (target={}), NPH plots={} (target={}), "
+                "final_step={}, final_time={:.6f}, snapshot_dt={:.6f}\n",
+                nvt_saved_xyz, nph_saved_xyz, nvt_saved_plots, kNvtPlots,
+                nph_saved_plots, kNphPlots, global_step, global_time,
+                kSnapshotDt);
     }
 
     MPI_Finalize();
