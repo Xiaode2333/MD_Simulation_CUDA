@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_ROOT="./results/20260323_NPH_batch_xyz_saving_piston_all_type0"
+BASE_ROOT="./results/20260324_NPH_batch_xyz_saving_piston_all_type0"
 ORI_CONFIG="./results/20260313_NVT_batch_xyz_saving/T=0.9/config_nvt_100.json"
 
 EXTRA_OVERRIDES=("$@")
@@ -81,7 +81,7 @@ SERIES_BIN="${BUILD_ROOT}/run_series_NPH_batch_xyz_saving_piston"
 
 mkdir -p "$BUILD_ROOT"
 
-if [ ! -f "${BUILD_ROOT}/CMakeCache.txt" ] || [ ! -x "$SERIES_BIN" ]; then
+if [ ! -f "${BUILD_ROOT}/CMakeCache.txt" ]; then
     echo "[INFO] Configuring and building in '${BUILD_ROOT}' for commit ${GIT_HASH}."
     cmake -B "$BUILD_ROOT" -S . \
         -DCMAKE_TOOLCHAIN_FILE="$VCPKG_CMAKE" \
@@ -93,6 +93,10 @@ if [ ! -f "${BUILD_ROOT}/CMakeCache.txt" ] || [ ! -x "$SERIES_BIN" ]; then
         -DPython3_EXECUTABLE="$PY_EXEC" \
         -DOMPI_CUDA_PREFIX="/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+fi
+
+if [ ! -x "$SERIES_BIN" ]; then
+    echo "[INFO] Building target 'run_series_NPH_batch_xyz_saving_piston' in '${BUILD_ROOT}' for commit ${GIT_HASH}."
     cmake --build "$BUILD_ROOT" -j --target run_series_NPH_batch_xyz_saving_piston
 else
     echo "[INFO] Reusing existing build in '${BUILD_ROOT}' for commit ${GIT_HASH}."
