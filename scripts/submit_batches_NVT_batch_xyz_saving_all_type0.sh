@@ -12,7 +12,7 @@ FIXED_OVERRIDES=(
     "Dn_particles_global=16384"
     "Dn_particles_type0=16384"
     "Ddevide_p=1"
-    "Dbarostat_mass=16384.0"
+    "Dbarostat_mass=1638.4"
 )
 
 mkdir -p "$BASE_ROOT"
@@ -102,7 +102,7 @@ echo "Submitting NVT xyz-saving all-type0 temperature array (T=0.5..1.0) into ${
 sbatch --job-name="nvt_xyz_all0_20260323" \
     --array=0-5 \
     --output="${BASE_ROOT}/slurm_%A_%a.out" \
-    scripts/run_series_NVT_batch_xyz_saving_piston.sh \
+    scripts/run_series_NVT_batch_xyz_saving.sh \
     "$BASE_ROOT" \
     "$ORI_CONFIG" \
     "$SERIES_BIN" \

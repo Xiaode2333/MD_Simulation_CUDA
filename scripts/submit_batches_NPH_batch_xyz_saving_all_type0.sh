@@ -12,7 +12,7 @@ FIXED_OVERRIDES=(
     "Dn_particles_global=16384"
     "Dn_particles_type0=16384"
     "Ddevide_p=1"
-    "Dbarostat_mass=16384.0"
+    "Dbarostat_mass=1638.4"
 )
 
 mkdir -p "$BASE_ROOT"

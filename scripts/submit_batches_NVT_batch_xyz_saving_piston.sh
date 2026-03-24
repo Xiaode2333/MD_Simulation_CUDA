@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-BASE_ROOT="./results/20260313_NVT_batch_xyz_saving_piston"
+BASE_ROOT="./results/20260313_NVT_batch_xyz_saving"
 ORI_CONFIG="./tests/run_NPH_test_piston/config_large_piston.json"
 
 EXTRA_OVERRIDES=("$@")
@@ -11,7 +11,7 @@ FIXED_OVERRIDES=(
     "Dbox_w_global=374.7456"
     "Dn_particles_global=16384"
     "Dn_particles_type0=8192"
-    "Dbarostat_mass=16384"
+    "Dbarostat_mass=1638.4"
 )
 
 mkdir -p "$BASE_ROOT"
@@ -98,9 +98,9 @@ else
 fi
 
 echo "Submitting NVT xyz-saving temperature array (T=0.5..1.0) into ${BASE_ROOT}"
-sbatch --job-name="nvt_piston_xyz_20260313" \
+sbatch --job-name="nvt_xyz_20260313" \
     --array=0-5 \
-    scripts/run_series_NVT_batch_xyz_saving_piston.sh \
+    scripts/run_series_NVT_batch_xyz_saving.sh \
     "$BASE_ROOT" \
     "$ORI_CONFIG" \
     "$SERIES_BIN" \
