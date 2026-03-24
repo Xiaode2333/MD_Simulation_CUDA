@@ -135,7 +135,22 @@ set(raft_DIR "/home/bh692/.conda/envs/py3/lib/cmake/raft")
 find_package(raft REQUIRED)
 
 # ---- Header-only Libs ----
-find_path(DELAUNATOR_CPP_INCLUDE_DIRS "delaunator-header-only.hpp")
+find_path(
+    DELAUNATOR_CPP_INCLUDE_DIRS
+    "delaunator-header-only.hpp"
+    HINTS
+        "${_LOCAL_VCPKG_PREFIX}/include"
+        "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/include"
+        "${CMAKE_SOURCE_DIR}/build/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/include"
+    PATH_SUFFIXES
+        include
+)
+if(NOT DELAUNATOR_CPP_INCLUDE_DIRS)
+    message(FATAL_ERROR
+        "Could not find delaunator-header-only.hpp. "
+        "Checked local vcpkg prefixes including '${_LOCAL_VCPKG_PREFIX}/include' "
+        "and '${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/include'.")
+endif()
 
 # ---- MPI / CUDA Helper ----
 if(DEFINED ENV{OMPI_CUDA_PREFIX})
