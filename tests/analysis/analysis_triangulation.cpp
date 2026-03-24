@@ -1,9 +1,10 @@
-// Stream a multi-frame XYZ trajectory, triangulate each frame with gDel2D, and
-// write one compact binary file beside the trajectory.
+// Stream a multi-frame XYZ trajectory, triangulate each frame with either a
+// CPU or GPU backend, and write one compact binary file beside the trajectory.
 //
 // Output format (.tri2d):
 // - File header: magic, versioned metadata, and the fixed rule used to derive
 //   the PBC expansion width from each frame's XYZ box data
+// - The selected triangulation backend is stored in the file header
 // - For each frame: frame metadata, the resolved per-frame PBC band width,
 //   expanded PBC vertex mapping,
 //   (particle index + periodic shift), then triangle connectivity as indices
@@ -16,12 +17,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
-#include <filesystem>
 #include <fstream>
+#include <limits.h>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -29,12 +31,13 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <cuda_runtime.h>
+#include <delaunator-header-only.hpp>
 #include <fmt/core.h>
 #include "external/gDel2D-Oct2015/src/gDel2D/GpuDelaunay.h"
-
-namespace fs = std::filesystem;
 
 namespace {
 
@@ -42,9 +45,15 @@ constexpr char kFileMagic[8] = {'T', 'R', 'I', '2', 'D', '0', '1', '\0'};
 constexpr std::uint32_t kFrameMagic = 0x314d5246u; // "FRM1"
 constexpr double kPbcBandMinBoxFraction = 0.25;
 
+enum class Backend {
+    Cpu,
+    Gpu,
+};
+
 struct Options {
-    fs::path xyz_path;
-    fs::path output_path;
+    std::string xyz_path;
+    std::string output_path;
+    Backend backend = Backend::Cpu;
     bool overwrite = false;
 };
 
@@ -76,9 +85,121 @@ struct ExpandedFrame {
     std::vector<std::int8_t> shift_y;
 };
 
+const char* backend_name(Backend backend) {
+    switch (backend) {
+    case Backend::Cpu:
+        return "cpu";
+    case Backend::Gpu:
+        return "gpu";
+    default:
+        return "unknown";
+    }
+}
+
+std::uint8_t backend_code(Backend backend) {
+    switch (backend) {
+    case Backend::Cpu:
+        return 0;
+    case Backend::Gpu:
+        return 1;
+    default:
+        return 255;
+    }
+}
+
+Backend parse_backend(const std::string& value) {
+    if (value == "cpu" || value == "CPU") {
+        return Backend::Cpu;
+    }
+    if (value == "gpu" || value == "GPU") {
+        return Backend::Gpu;
+    }
+    throw std::invalid_argument(
+        fmt::format("Unsupported backend '{}'; expected 'cpu' or 'gpu'", value));
+}
+
+bool is_absolute_path(const std::string& path) {
+    return !path.empty() && path.front() == '/';
+}
+
+std::string absolute_path_string(const std::string& path) {
+    if (path.empty()) {
+        return path;
+    }
+    if (is_absolute_path(path)) {
+        return path;
+    }
+
+    char cwd_buf[PATH_MAX];
+    if (getcwd(cwd_buf, sizeof(cwd_buf)) == nullptr) {
+        throw std::runtime_error(
+            fmt::format("getcwd failed while resolving '{}': {}", path, std::strerror(errno)));
+    }
+
+    return fmt::format("{}/{}", cwd_buf, path);
+}
+
+bool path_exists(const std::string& path) {
+    struct stat st {};
+    return ::stat(path.c_str(), &st) == 0;
+}
+
+bool path_is_regular_file(const std::string& path) {
+    struct stat st {};
+    if (::stat(path.c_str(), &st) != 0) {
+        return false;
+    }
+    return S_ISREG(st.st_mode);
+}
+
+std::string parent_directory(const std::string& path) {
+    const std::size_t pos = path.find_last_of('/');
+    if (pos == std::string::npos) {
+        return std::string();
+    }
+    if (pos == 0) {
+        return "/";
+    }
+    return path.substr(0, pos);
+}
+
+void create_directories_recursive(const std::string& dir) {
+    if (dir.empty() || dir == ".") {
+        return;
+    }
+
+    std::string current;
+    if (dir.front() == '/') {
+        current = "/";
+    }
+
+    std::size_t pos = 0;
+    while (pos < dir.size()) {
+        const std::size_t slash = dir.find('/', pos);
+        const std::string part = dir.substr(pos, slash == std::string::npos ? std::string::npos
+                                                                             : (slash - pos));
+        if (!part.empty()) {
+            if (!current.empty() && current.back() != '/') {
+                current.push_back('/');
+            }
+            current += part;
+
+            if (::mkdir(current.c_str(), 0775) != 0 && errno != EEXIST) {
+                throw std::runtime_error(
+                    fmt::format("mkdir failed for '{}': {}", current, std::strerror(errno)));
+            }
+        }
+
+        if (slash == std::string::npos) {
+            break;
+        }
+        pos = slash + 1;
+    }
+}
+
 void print_usage(const char* argv0) {
     fmt::print(
-        "Usage: {} --xyz PATH [--output PATH] [--overwrite]\n"
+        "Usage: {} --xyz PATH [--output PATH] [--backend cpu|gpu] [--overwrite]\n"
         "Writes PATH.tri2d by default.\n",
         argv0);
 }
@@ -137,12 +258,17 @@ Options parse_args(int argc, char** argv) {
             if (i + 1 >= argc) {
                 throw std::invalid_argument("--xyz requires a path");
             }
-            options.xyz_path = argv[++i];
+            options.xyz_path = std::string(argv[++i]);
+        } else if (arg == "--backend") {
+            if (i + 1 >= argc) {
+                throw std::invalid_argument("--backend requires a value");
+            }
+            options.backend = parse_backend(argv[++i]);
         } else if (arg == "--output") {
             if (i + 1 >= argc) {
                 throw std::invalid_argument("--output requires a path");
             }
-            options.output_path = argv[++i];
+            options.output_path = std::string(argv[++i]);
         } else if (arg == "--overwrite") {
             options.overwrite = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -158,7 +284,7 @@ Options parse_args(int argc, char** argv) {
     }
 
     if (options.output_path.empty()) {
-        options.output_path = fs::path(options.xyz_path.string() + ".tri2d");
+        options.output_path = options.xyz_path + ".tri2d";
     }
 
     return options;
@@ -436,6 +562,48 @@ std::vector<std::int32_t> triangulate_frame(const ExpandedFrame& expanded, doubl
     return triangles;
 }
 
+std::vector<std::int32_t> triangulate_frame_cpu(const ExpandedFrame& expanded,
+                                                double Lx,
+                                                double Ly) {
+    if (expanded.points.size() < 3) {
+        return {};
+    }
+
+    std::vector<double> coords;
+    coords.reserve(expanded.points.size() * 2);
+    for (const Point2& point : expanded.points) {
+        coords.push_back(static_cast<double>(point._p[0]));
+        coords.push_back(static_cast<double>(point._p[1]));
+    }
+
+    delaunator::Delaunator triangulation(coords);
+
+    std::vector<std::int32_t> triangles;
+    triangles.reserve(triangulation.triangles.size());
+
+    const auto in_base_box = [Lx, Ly, &triangulation](std::size_t vertex_idx) {
+        const double x = triangulation.coords[2 * vertex_idx];
+        const double y = triangulation.coords[2 * vertex_idx + 1];
+        return (x >= 0.0 && x < Lx && y >= 0.0 && y < Ly);
+    };
+
+    for (std::size_t t = 0; t + 2 < triangulation.triangles.size(); t += 3) {
+        const std::size_t v0 = triangulation.triangles[t];
+        const std::size_t v1 = triangulation.triangles[t + 1];
+        const std::size_t v2 = triangulation.triangles[t + 2];
+
+        if (!(in_base_box(v0) || in_base_box(v1) || in_base_box(v2))) {
+            continue;
+        }
+
+        triangles.push_back(static_cast<std::int32_t>(v0));
+        triangles.push_back(static_cast<std::int32_t>(v1));
+        triangles.push_back(static_cast<std::int32_t>(v2));
+    }
+
+    return triangles;
+}
+
 template <typename T>
 void write_pod(std::ostream& out, const T& value) {
     out.write(reinterpret_cast<const char*>(&value), sizeof(T));
@@ -469,8 +637,9 @@ void write_vector(std::ostream& out, const std::vector<T>& values) {
 }
 
 void write_file_header(std::ostream& out,
-                       const fs::path& xyz_path,
-                       const fs::path& output_path,
+                       const std::string& xyz_path,
+                       const std::string& output_path,
+                       Backend backend,
                        const TriangulationParameters& params,
                        std::streampos& frame_count_pos) {
     out.write(kFileMagic, sizeof(kFileMagic));
@@ -478,14 +647,15 @@ void write_file_header(std::ostream& out,
         throw std::runtime_error("Failed while writing file magic");
     }
 
-    const std::uint32_t version = 1;
+    const std::uint32_t version = 2;
     write_pod(out, version);
 
     frame_count_pos = out.tellp();
     write_pod<std::uint64_t>(out, 0);
+    write_pod(out, backend_code(backend));
     write_pod(out, params.pbc_band_min_box_fraction);
-    write_string(out, fs::absolute(xyz_path).string());
-    write_string(out, fs::absolute(output_path).string());
+    write_string(out, absolute_path_string(xyz_path));
+    write_string(out, absolute_path_string(output_path));
 }
 
 void write_frame_record(std::ostream& out,
@@ -553,25 +723,25 @@ int main(int argc, char** argv) {
 
         const Options options = parse_args(argc, argv);
 
-        if (!fs::exists(options.xyz_path)) {
+        if (!path_exists(options.xyz_path)) {
             throw std::runtime_error(fmt::format("XYZ file '{}' does not exist",
-                                                 options.xyz_path.string()));
+                                                 options.xyz_path));
         }
-        if (!fs::is_regular_file(options.xyz_path)) {
+        if (!path_is_regular_file(options.xyz_path)) {
             throw std::runtime_error(fmt::format("'{}' is not a regular file",
-                                                 options.xyz_path.string()));
+                                                 options.xyz_path));
         }
 
-        if (fs::exists(options.output_path) && !options.overwrite) {
+        if (path_exists(options.output_path) && !options.overwrite) {
             fmt::print("[analysis_triangulation] Output already exists, skipping: {}\n",
-                       options.output_path.string());
+                       options.output_path);
             return 0;
         }
 
         std::ifstream in(options.xyz_path);
         if (!in) {
             throw std::runtime_error(
-                fmt::format("Failed to open XYZ file '{}'", options.xyz_path.string()));
+                fmt::format("Failed to open XYZ file '{}'", options.xyz_path));
         }
 
         std::vector<ParticleSnapshot> particles;
@@ -587,31 +757,33 @@ int main(int argc, char** argv) {
 
         const TriangulationParameters params = resolve_triangulation_parameters();
 
-        fmt::print("[analysis_triangulation] XYZ: {}\n", options.xyz_path.string());
-        fmt::print("[analysis_triangulation] Output: {}\n", options.output_path.string());
+        fmt::print("[analysis_triangulation] XYZ: {}\n", options.xyz_path);
+        fmt::print("[analysis_triangulation] Output: {}\n", options.output_path);
+        fmt::print("[analysis_triangulation] Backend: {}\n", backend_name(options.backend));
         fmt::print(
             "[analysis_triangulation] Using per-frame PBC band width = {:.3f} * min(Lx, Ly) from the XYZ header\n",
             params.pbc_band_min_box_fraction);
 
-        fs::create_directories(options.output_path.parent_path());
+        create_directories_recursive(parent_directory(options.output_path));
 
-        const fs::path tmp_output_path = fs::path(options.output_path.string() + ".tmp");
-        {
-            std::error_code ec;
-            fs::remove(tmp_output_path, ec);
-        }
+        const std::string tmp_output_path = options.output_path + ".tmp";
+        std::remove(tmp_output_path.c_str());
 
         std::ofstream out(tmp_output_path, std::ios::binary | std::ios::trunc);
         if (!out) {
             throw std::runtime_error(
-                fmt::format("Failed to open output file '{}'", tmp_output_path.string()));
+                fmt::format("Failed to open output file '{}'", tmp_output_path));
         }
 
         std::streampos frame_count_pos{};
-        write_file_header(out, options.xyz_path, options.output_path, params, frame_count_pos);
+        write_file_header(out, options.xyz_path, options.output_path, options.backend, params,
+                          frame_count_pos);
 
-        ensure_cuda_device();
-        GpuDel gpu_del;
+        std::optional<GpuDel> gpu_del;
+        if (options.backend == Backend::Gpu) {
+            ensure_cuda_device();
+            gpu_del.emplace();
+        }
 
         const auto start_time = std::chrono::steady_clock::now();
 
@@ -629,8 +801,12 @@ int main(int argc, char** argv) {
                 compute_frame_pbc_band_width(particles.size(), meta_ref.Lx, meta_ref.Ly, params);
             ExpandedFrame expanded =
                 build_expanded_frame(particles, meta_ref.Lx, meta_ref.Ly, pbc_band_width);
-            std::vector<std::int32_t> triangles =
-                triangulate_frame(expanded, meta_ref.Lx, meta_ref.Ly, gpu_del);
+            std::vector<std::int32_t> triangles;
+            if (options.backend == Backend::Gpu) {
+                triangles = triangulate_frame(expanded, meta_ref.Lx, meta_ref.Ly, *gpu_del);
+            } else {
+                triangles = triangulate_frame_cpu(expanded, meta_ref.Lx, meta_ref.Ly);
+            }
 
             write_frame_record(out, frame_count, meta_ref, particles.size(), pbc_band_width,
                                expanded, triangles);
@@ -642,8 +818,9 @@ int main(int argc, char** argv) {
                 const std::chrono::duration<double> elapsed =
                     std::chrono::steady_clock::now() - start_time;
                 fmt::print(
-                    "[analysis_triangulation] frame {} phase={} global_step={} Lx={:.6f} Ly={:.6f} band={:.6f} vertices={} triangles={} elapsed={:.1f}s\n",
+                    "[analysis_triangulation] frame {} backend={} phase={} global_step={} Lx={:.6f} Ly={:.6f} band={:.6f} vertices={} triangles={} elapsed={:.1f}s\n",
                     frame_count,
+                    backend_name(options.backend),
                     meta_ref.phase.empty() ? "UNKNOWN" : meta_ref.phase,
                     meta_ref.global_step,
                     meta_ref.Lx,
@@ -667,10 +844,21 @@ int main(int argc, char** argv) {
         finalize_output_file(out, frame_count_pos, frame_count);
         out.close();
 
-        if (fs::exists(options.output_path)) {
-            fs::remove(options.output_path);
+        if (path_exists(options.output_path)) {
+            if (std::remove(options.output_path.c_str()) != 0) {
+                throw std::runtime_error(
+                    fmt::format("Failed to remove existing output '{}': {}",
+                                options.output_path,
+                                std::strerror(errno)));
+            }
         }
-        fs::rename(tmp_output_path, options.output_path);
+        if (std::rename(tmp_output_path.c_str(), options.output_path.c_str()) != 0) {
+            throw std::runtime_error(
+                fmt::format("Failed to rename '{}' to '{}': {}",
+                            tmp_output_path,
+                            options.output_path,
+                            std::strerror(errno)));
+        }
 
         const std::chrono::duration<double> total_elapsed =
             std::chrono::steady_clock::now() - start_time;

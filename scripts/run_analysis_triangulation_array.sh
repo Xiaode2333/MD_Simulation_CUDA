@@ -1,10 +1,9 @@
 #!/bin/bash
-#SBATCH --partition=pi_co54
-#SBATCH --time=1-00:00:00
+#SBATCH --partition=day
+#SBATCH --time=24:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --gpus-per-task=1
-#SBATCH --mem=32G
+#SBATCH --mem=20G
 #SBATCH --mail-type=FAIL
 
 set -euo pipefail
@@ -26,6 +25,16 @@ fi
 
 REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 TRI_OVERWRITE="${TRI_OVERWRITE:-0}"
+TRI_BACKEND="${TRI_BACKEND:-cpu}"
+
+case "$TRI_BACKEND" in
+    cpu|gpu)
+        ;;
+    *)
+        echo "[ERROR] TRI_BACKEND must be 'cpu' or 'gpu', got '$TRI_BACKEND'." >&2
+        exit 9
+        ;;
+esac
 
 if ! type module >/dev/null 2>&1; then
     if [ -r /etc/profile.d/modules.sh ]; then
@@ -87,9 +96,9 @@ if [ ! -x "$ANALYSIS_BIN" ]; then
     exit 8
 fi
 
-echo "[INFO] Running triangulation analysis for '$xyz_file'"
+echo "[INFO] Running triangulation analysis for '$xyz_file' with backend '$TRI_BACKEND'"
 
-analysis_args=(--xyz "$xyz_file")
+analysis_args=(--xyz "$xyz_file" --backend "$TRI_BACKEND")
 if [ "$TRI_OVERWRITE" = "1" ]; then
     analysis_args+=(--overwrite)
 fi

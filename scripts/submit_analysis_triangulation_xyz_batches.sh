@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 "${SCRIPT_DIR}/submit_analysis_triangulation_array.sh" \
+    --backend "cpu" \
     --job-name "tri2d_xyz_batches_20260324" \
     "$@" \
     "results/20260309_NPH_batch_xyz_saving" \

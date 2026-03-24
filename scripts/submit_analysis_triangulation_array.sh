@@ -4,10 +4,19 @@ set -euo pipefail
 
 JOB_NAME="tri2d_array"
 OVERWRITE=0
+BACKEND="cpu"
 RESULT_ROOTS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --backend)
+            if [ $# -lt 2 ]; then
+                echo "[ERROR] --backend requires a value." >&2
+                exit 1
+            fi
+            BACKEND="$2"
+            shift 2
+            ;;
         --job-name)
             if [ $# -lt 2 ]; then
                 echo "[ERROR] --job-name requires a value." >&2
@@ -21,7 +30,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --help|-h)
-            echo "Usage: $0 [--job-name NAME] [--overwrite] RESULT_ROOT [RESULT_ROOT ...]" >&2
+            echo "Usage: $0 [--backend cpu|gpu] [--job-name NAME] [--overwrite] RESULT_ROOT [RESULT_ROOT ...]" >&2
             exit 0
             ;;
         *)
@@ -31,9 +40,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+case "$BACKEND" in
+    cpu|gpu)
+        ;;
+    *)
+        echo "[ERROR] --backend must be 'cpu' or 'gpu', got '$BACKEND'." >&2
+        exit 2
+        ;;
+esac
+
 if [ "${#RESULT_ROOTS[@]}" -eq 0 ]; then
     echo "[ERROR] Provide at least one result root containing .xyz trajectories." >&2
-    exit 2
+    exit 3
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,7 +70,7 @@ if ! type module >/dev/null 2>&1; then
         source /usr/share/lmod/lmod/init/bash
     else
         echo "[ERROR] 'module' command is unavailable and module init scripts were not found." >&2
-        exit 3
+        exit 4
     fi
 fi
 
@@ -78,7 +96,7 @@ elif [ -r /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
     source /apps/software/2022b/software/miniconda/24.11.3/etc/profile.d/conda.sh
 else
     echo "[ERROR] Could not find conda.sh to activate py3." >&2
-    exit 4
+    exit 5
 fi
 set +u
 conda activate py3
@@ -94,7 +112,7 @@ PY_EXEC="$(which python)"
 
 if ! GIT_HASH=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null); then
     echo "[ERROR] Failed to get git commit hash from '$REPO_ROOT'." >&2
-    exit 5
+    exit 6
 fi
 
 BUILD_ROOT="${REPO_ROOT}/build_slurm_tmp/build_${GIT_HASH}"
@@ -127,7 +145,7 @@ fi
 for root in "${RESULT_ROOTS[@]}"; do
     if [ ! -d "$root" ]; then
         echo "[ERROR] Result root '$root' does not exist." >&2
-        exit 6
+        exit 7
     fi
     find "$(realpath "$root")" -type f -name '*.xyz' | sort >> "$XYZ_FILE_LIST"
 done
@@ -137,21 +155,41 @@ sort -u -o "$XYZ_FILE_LIST" "$XYZ_FILE_LIST"
 TASK_COUNT="$(wc -l < "$XYZ_FILE_LIST")"
 if [ "$TASK_COUNT" -eq 0 ]; then
     echo "[ERROR] No .xyz trajectories found under the provided result roots." >&2
-    exit 7
+    exit 8
 fi
 
 ARRAY_END=$((TASK_COUNT - 1))
 
+SBATCH_ARGS=(
+    --job-name="$JOB_NAME"
+    --array="0-${ARRAY_END}"
+    --output="${LOG_ROOT}/slurm-%A_%a.out"
+    --error="${LOG_ROOT}/slurm-%A_%a.err"
+)
+
+if [ "$BACKEND" = "gpu" ]; then
+    SBATCH_ARGS+=(
+        --partition="gpu_devel"
+        --time="06:00:00"
+        --mem="20G"
+        --gpus-per-task="1"
+    )
+else
+    SBATCH_ARGS+=(
+        --partition="pi_co54"
+        --time="06:00:00"
+        --mem="20G"
+    )
+fi
+
 echo "Submitting triangulation array job"
+echo "  backend:  ${BACKEND}"
 echo "  job name: ${JOB_NAME}"
 echo "  tasks:    ${TASK_COUNT}"
 echo "  list:     ${XYZ_FILE_LIST}"
 echo "  logs:     ${LOG_ROOT}"
 
 sbatch \
-    --job-name="$JOB_NAME" \
-    --array="0-${ARRAY_END}" \
-    --output="${LOG_ROOT}/slurm-%A_%a.out" \
-    --error="${LOG_ROOT}/slurm-%A_%a.err" \
-    --export=ALL,REPO_ROOT="${REPO_ROOT}",XYZ_FILE_LIST="${XYZ_FILE_LIST}",ANALYSIS_BIN="${ANALYSIS_BIN}",TRI_OVERWRITE="${OVERWRITE}" \
+    "${SBATCH_ARGS[@]}" \
+    --export=ALL,REPO_ROOT="${REPO_ROOT}",XYZ_FILE_LIST="${XYZ_FILE_LIST}",ANALYSIS_BIN="${ANALYSIS_BIN}",TRI_OVERWRITE="${OVERWRITE}",TRI_BACKEND="${BACKEND}" \
     "${SCRIPT_DIR}/run_analysis_triangulation_array.sh"
