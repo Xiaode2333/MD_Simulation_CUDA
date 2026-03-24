@@ -116,24 +116,30 @@ cat > "${BASE_DIR}/version.json" <<EOF_JSON
 }
 EOF_JSON
 
-ORI_CONFIG_NAME="$(basename "$ORI_CONFIG")"
-ORI_CONFIG_STEM="${ORI_CONFIG_NAME%.json}"
-cp -f -- "$ORI_CONFIG" "${CONFIGS_DIR}/${ORI_CONFIG_STEM}.input.json"
-
 override_cli=()
-override_cli+=("--DT_init=${T_VALUE}")
-override_cli+=("--DT_target=${T_VALUE}")
 
 for override in "$@"; do
     if [ -z "$override" ]; then
         continue
     fi
     if [[ "$override" == --* ]]; then
-        override_cli+=("$override")
+        normalized_override="$override"
     else
-        override_cli+=("--${override}")
+        normalized_override="--${override}"
     fi
+
+    case "$normalized_override" in
+        --DT_init=*|--DT_target=*|--Dbarostat_mass=*)
+            continue
+            ;;
+    esac
+
+    override_cli+=("$normalized_override")
 done
+
+override_cli+=("--DT_init=${T_VALUE}")
+override_cli+=("--DT_target=${T_VALUE}")
+override_cli+=("--Dbarostat_mass=1638.4")
 
 echo "Launching run_series_NPH_batch_xyz_saving for T=${T_VALUE} with base dir '${BASE_DIR}'."
 srun --cpu-bind=none "$SERIES_BIN" --base-dir "$BASE_DIR" --ori-config "$ORI_CONFIG" "${override_cli[@]}"

@@ -185,11 +185,13 @@ int main(int argc, char **argv) {
 
     MDConfigManager cfg_nvt = cfg_base;
     cfg_nvt.config.dt = kNvtDt;
+    cfg_nvt.config.save_dt_interval = kSnapshotDt;
     cfg_nvt.config.rank_size = rank_size;
     cfg_nvt.config.rank_idx = rank_idx;
 
     MDConfigManager cfg_nph = cfg_base;
     cfg_nph.config.dt = kNphDt;
+    cfg_nph.config.save_dt_interval = kSnapshotDt;
     cfg_nph.config.rank_size = rank_size;
     cfg_nph.config.rank_idx = rank_idx;
 
