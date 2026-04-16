@@ -2,14 +2,15 @@
 
 set -euo pipefail
 
-if [ $# -lt 1 ] || [ $# -gt 3 ]; then
-    echo "Usage: $0 RESULT_ROOT [GIF_FPS] [JOB_NAME]" >&2
+if [ $# -lt 1 ] || [ $# -gt 4 ]; then
+    echo "Usage: $0 RESULT_ROOT [GIF_FPS] [JOB_NAME] [REGENERATE_SNAPSHOTS]" >&2
     exit 1
 fi
 
 RESULT_ROOT="$1"
 GIF_FPS="${2:-4}"
 JOB_NAME="${3:-$(basename "$RESULT_ROOT")_gif}"
+REGENERATE_SNAPSHOTS="${4:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -45,11 +46,12 @@ echo "Submitting GIF conversion array for ${RESULT_ROOT}"
 echo "  tasks: ${task_count}"
 echo "  fps:   ${GIF_FPS}"
 echo "  list:  ${FRAME_DIR_LIST}"
+echo "  replot snapshots: ${REGENERATE_SNAPSHOTS}"
 
 sbatch \
     --job-name="$JOB_NAME" \
     --array="0-${array_end}" \
     --output="${LOG_DIR}/pics2gif-%A_%a.out" \
     --error="${LOG_DIR}/pics2gif-%A_%a.err" \
-    --export=ALL,REPO_ROOT="${REPO_ROOT}",FRAME_DIR_LIST="${FRAME_DIR_LIST}",GIF_FPS="${GIF_FPS}" \
+    --export=ALL,REPO_ROOT="${REPO_ROOT}",FRAME_DIR_LIST="${FRAME_DIR_LIST}",GIF_FPS="${GIF_FPS}",REGENERATE_SNAPSHOTS="${REGENERATE_SNAPSHOTS}" \
     "${SCRIPT_DIR}/run_svg_dirs_to_gif_array.sh"

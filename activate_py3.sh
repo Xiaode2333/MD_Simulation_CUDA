@@ -25,6 +25,18 @@ else
     echo "Activated py3 conda environment" >&2
 fi
 
+# Prefer the conda-provided C/C++ runtime libraries for compiled Python wheels
+# such as matplotlib, which can otherwise pick up incompatible module libraries.
+if [ -n "${CONDA_PREFIX:-}" ] && [ -d "${CONDA_PREFIX}/lib" ]; then
+    case ":${LD_LIBRARY_PATH:-}:" in
+        *":${CONDA_PREFIX}/lib:"*)
+            ;;
+        *)
+            export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+            ;;
+    esac
+fi
+
 # If arguments are provided, execute them
 if [ $# -gt 0 ]; then
     exec "$@"

@@ -5,6 +5,7 @@ set -euo pipefail
 JOB_NAME="tri2d_array"
 OVERWRITE=0
 BACKEND="cpu"
+MISSING_ONLY=0
 RESULT_ROOTS=()
 
 while [ $# -gt 0 ]; do
@@ -29,8 +30,12 @@ while [ $# -gt 0 ]; do
             OVERWRITE=1
             shift
             ;;
+        --missing-only)
+            MISSING_ONLY=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 [--backend cpu|gpu] [--job-name NAME] [--overwrite] RESULT_ROOT [RESULT_ROOT ...]" >&2
+            echo "Usage: $0 [--backend cpu|gpu] [--job-name NAME] [--overwrite] [--missing-only] RESULT_ROOT [RESULT_ROOT ...]" >&2
             exit 0
             ;;
         *)
@@ -57,9 +62,12 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LOG_ROOT="${REPO_ROOT}/results/triangulation_task_arrays/${JOB_NAME}"
-XYZ_FILE_LIST="${LOG_ROOT}/xyz_files.txt"
 
 mkdir -p "$LOG_ROOT"
+
+# Keep each submission's task list immutable so reruns with the same job name
+# cannot invalidate array indices for older jobs that are still pending.
+XYZ_FILE_LIST="$(mktemp "${LOG_ROOT}/xyz_files.XXXXXX.txt")"
 
 if ! type module >/dev/null 2>&1; then
     if [ -r /etc/profile.d/modules.sh ]; then
@@ -141,19 +149,34 @@ else
     echo "[INFO] Reusing existing build '${BUILD_ROOT}'."
 fi
 
+FOUND_COUNT=0
+SKIPPED_EXISTING_COUNT=0
+
 : > "$XYZ_FILE_LIST"
 for root in "${RESULT_ROOTS[@]}"; do
     if [ ! -d "$root" ]; then
         echo "[ERROR] Result root '$root' does not exist." >&2
         exit 7
     fi
-    find "$(realpath "$root")" -type f -name '*.xyz' | sort >> "$XYZ_FILE_LIST"
+    while IFS= read -r xyz_file; do
+        FOUND_COUNT=$((FOUND_COUNT + 1))
+        if [ "$MISSING_ONLY" = "1" ] && [ -f "${xyz_file}.tri2d" ]; then
+            SKIPPED_EXISTING_COUNT=$((SKIPPED_EXISTING_COUNT + 1))
+            continue
+        fi
+        printf '%s\n' "$xyz_file" >> "$XYZ_FILE_LIST"
+    done < <(find "$(realpath "$root")" -type f -name '*.xyz' | sort)
 done
 
 sort -u -o "$XYZ_FILE_LIST" "$XYZ_FILE_LIST"
 
 TASK_COUNT="$(wc -l < "$XYZ_FILE_LIST")"
 if [ "$TASK_COUNT" -eq 0 ]; then
+    if [ "$MISSING_ONLY" = "1" ]; then
+        echo "[INFO] No missing .tri2d outputs found under the provided result roots."
+        echo "[INFO] Existing trajectories checked: ${FOUND_COUNT}"
+        exit 0
+    fi
     echo "[ERROR] No .xyz trajectories found under the provided result roots." >&2
     exit 8
 fi
@@ -167,24 +190,14 @@ SBATCH_ARGS=(
     --error="${LOG_ROOT}/slurm-%A_%a.err"
 )
 
-if [ "$BACKEND" = "gpu" ]; then
-    SBATCH_ARGS+=(
-        --partition="gpu_devel"
-        --time="06:00:00"
-        --mem="20G"
-        --gpus-per-task="1"
-    )
-else
-    SBATCH_ARGS+=(
-        --partition="pi_co54"
-        --time="06:00:00"
-        --mem="20G"
-    )
-fi
-
 echo "Submitting triangulation array job"
 echo "  backend:  ${BACKEND}"
 echo "  job name: ${JOB_NAME}"
+echo "  mode:     $([ "$MISSING_ONLY" = "1" ] && echo "missing-only" || echo "all xyz")"
+echo "  found:    ${FOUND_COUNT}"
+if [ "$MISSING_ONLY" = "1" ]; then
+    echo "  skipped:  ${SKIPPED_EXISTING_COUNT} existing .tri2d"
+fi
 echo "  tasks:    ${TASK_COUNT}"
 echo "  list:     ${XYZ_FILE_LIST}"
 echo "  logs:     ${LOG_ROOT}"

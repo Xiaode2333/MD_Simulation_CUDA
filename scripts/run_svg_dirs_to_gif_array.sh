@@ -18,6 +18,7 @@ fi
 
 REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 GIF_FPS="${GIF_FPS:-4}"
+REGENERATE_SNAPSHOTS="${REGENERATE_SNAPSHOTS:-0}"
 
 if ! type module >/dev/null 2>&1; then
     if [ -r /etc/profile.d/modules.sh ]; then
@@ -71,11 +72,26 @@ fi
 
 folder_name="$(basename "$frame_dir")"
 output_gif="$frame_dir/${folder_name}.gif"
+gif_input_dir="$frame_dir"
+gif_frame_count="$svg_count"
 
-echo "[INFO] Converting ${svg_count} SVG frame(s) from '$frame_dir' to '$output_gif' at ${GIF_FPS} fps."
+if [ "$REGENERATE_SNAPSHOTS" = "1" ]; then
+    echo "[INFO] Regenerating snapshot SVGs in '$frame_dir' from trajectory data."
+    cd "$REPO_ROOT"
+    python python/regenerate_phase_snapshots.py \
+        --frame-dir "$frame_dir"
+    gif_input_dir="$frame_dir/png"
+    gif_frame_count="$(find "$gif_input_dir" -maxdepth 1 -type f -name '*.png' | wc -l)"
+    if [ "$gif_frame_count" -eq 0 ]; then
+        echo "[ERROR] No PNG frames were regenerated in '$gif_input_dir'." >&2
+        exit 8
+    fi
+fi
+
+echo "[INFO] Converting ${gif_frame_count} frame(s) from '$gif_input_dir' to '$output_gif' at ${GIF_FPS} fps."
 
 cd "$REPO_ROOT"
 python python/build_gif.py \
-    --figure-dir "$frame_dir" \
+    --figure-dir "$gif_input_dir" \
     --output "$output_gif" \
     --fps "$GIF_FPS"
