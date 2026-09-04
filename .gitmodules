@@ -1,3 +1,0 @@
-[submodule "external/raft"]
-	path = external/raft
-	url = https://github.com/rapidsai/raft.git

@@ -24,19 +24,11 @@ print(f"  CONDA_DEFAULT_ENV: {os.environ.get('CONDA_DEFAULT_ENV', 'Not set')}")
 
 # PATH
 path = os.environ.get('PATH', '')
-py3_path = '/home/bh692/.conda/envs/py3/bin'
-if py3_path in path:
-    print(f"  ✓ py3 bin directory is in PATH")
+conda_prefix = os.environ.get('CONDA_PREFIX')
+if conda_prefix and os.path.commonpath([sys.executable, conda_prefix]) == conda_prefix:
+    print("  ✓ Using the active Conda environment Python")
 else:
-    print(f"  ✗ py3 bin directory is NOT in PATH")
-
-# Check if we're using the py3 environment Python
-expected_prefix = '/home/bh692/.conda/envs/py3'
-if sys.executable.startswith(expected_prefix):
-    print(f"  ✓ Using py3 environment Python")
-else:
-    print(f"  ✗ NOT using py3 environment Python")
-    print(f"    Expected prefix: {expected_prefix}")
+    print("  ✗ Python is not running from the active Conda environment")
     print(f"    Actual executable: {sys.executable}")
 
 # Try to import common scientific packages

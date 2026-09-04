@@ -25,6 +25,7 @@ compile_commands.json
 .DS_Store
 .ipynb_checkpoints/
 __pycache__/
+.pytest_cache/
 .mypy_cache/
 /vcpkg_installed/
 *.png
@@ -37,6 +38,9 @@ python/__pycache__/
 /tmp/
 .vscode/
 *.bin
+*.exe
+*.swp
+*.swo
 ToDo.md
 /build_slurm_tmp/
 .cache/

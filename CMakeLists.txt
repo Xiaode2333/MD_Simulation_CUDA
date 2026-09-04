@@ -1,79 +1,11 @@
 cmake_minimum_required(VERSION 3.18)
-
-# Pin the real GCC 13 toolchain explicitly. The OpenMPI wrappers on this
-# cluster inherit whatever gcc/g++ happen to be first on PATH, which can
-# silently fall back to GCC 8 and break RAFT's <memory_resource> includes.
-set(_GCCCORE_ROOT "/apps/software/2024a/software/GCCcore/13.3.0")
-set(_MPI_ROOT "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0")
-set(_CUDA_ROOT "/apps/software/2024a/software/CUDA/12.6.0")
-set(_CONDA_PY3_ROOT "/home/bh692/.conda/envs/py3")
-set(_NLOHMANN_JSON_ROOT "/apps/software/2024a/software/nlohmann_json/3.11.3-GCCcore-13.3.0")
-set(_GNU_C_COMPILER "${_GCCCORE_ROOT}/bin/gcc")
-set(_GNU_CXX_COMPILER "${_GCCCORE_ROOT}/bin/g++")
-set(_MPI_C_COMPILER "${_MPI_ROOT}/bin/mpicc")
-set(_MPI_CXX_COMPILER "${_MPI_ROOT}/bin/mpicxx")
-set(_CUDA_NVCC "${_CUDA_ROOT}/bin/nvcc")
-
-# Ensure NVCC uses the same modern GCC toolchain as the C/C++ compilers.
-# This must be set before the CUDA language is enabled by the project() call.
-if(NOT DEFINED CMAKE_C_COMPILER OR CMAKE_C_COMPILER MATCHES "/OpenMPI/.*/bin/mpicc$")
-    set(CMAKE_C_COMPILER "${_GNU_C_COMPILER}" CACHE FILEPATH "" FORCE)
-endif()
-if(NOT DEFINED CMAKE_CXX_COMPILER OR CMAKE_CXX_COMPILER MATCHES "/OpenMPI/.*/bin/mpicxx$")
-    set(CMAKE_CXX_COMPILER "${_GNU_CXX_COMPILER}" CACHE FILEPATH "" FORCE)
-endif()
-if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER OR CMAKE_CUDA_HOST_COMPILER STREQUAL "" OR CMAKE_CUDA_HOST_COMPILER MATCHES "/OpenMPI/.*/bin/mpicxx$")
-    set(CMAKE_CUDA_HOST_COMPILER "${_GNU_CXX_COMPILER}" CACHE FILEPATH "Host compiler used by NVCC" FORCE)
-endif()
-if(NOT DEFINED CMAKE_CUDA_COMPILER OR CMAKE_CUDA_COMPILER MATCHES "-NOTFOUND$")
-    set(CMAKE_CUDA_COMPILER "${_CUDA_NVCC}" CACHE FILEPATH "" FORCE)
-endif()
-if(NOT DEFINED MPI_C_COMPILER)
-    set(MPI_C_COMPILER "${_MPI_C_COMPILER}" CACHE FILEPATH "MPI C wrapper" FORCE)
-endif()
-if(NOT DEFINED MPI_CXX_COMPILER)
-    set(MPI_CXX_COMPILER "${_MPI_CXX_COMPILER}" CACHE FILEPATH "MPI C++ wrapper" FORCE)
-endif()
-set(CUDAToolkit_ROOT "${_CUDA_ROOT}" CACHE PATH "" FORCE)
-set(CUDA_TOOLKIT_ROOT_DIR "${_CUDA_ROOT}" CACHE PATH "" FORCE)
-set(ENV{CUDACXX} "${_CUDA_NVCC}")
-set(ENV{CUDAHOSTCXX} "${_GNU_CXX_COMPILER}")
-if(NOT DEFINED Python3_ROOT_DIR OR Python3_ROOT_DIR STREQUAL "" OR Python3_ROOT_DIR MATCHES "-NOTFOUND$")
-    set(Python3_ROOT_DIR "${_CONDA_PY3_ROOT}" CACHE PATH "" FORCE)
-endif()
-if(NOT DEFINED Python3_EXECUTABLE OR Python3_EXECUTABLE MATCHES "-NOTFOUND$")
-    set(Python3_EXECUTABLE "${_CONDA_PY3_ROOT}/bin/python" CACHE FILEPATH "" FORCE)
-endif()
-if(EXISTS "${_CONDA_PY3_ROOT}")
-    list(PREPEND CMAKE_PREFIX_PATH "${_CONDA_PY3_ROOT}")
-endif()
-if(EXISTS "${_NLOHMANN_JSON_ROOT}")
-    list(PREPEND CMAKE_PREFIX_PATH "${_NLOHMANN_JSON_ROOT}")
-endif()
-
 project(CUDA2_MD LANGUAGES C CXX CUDA)
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# Hide noisy RAFT deprecation #pragma messages that come from transitive includes.
-# We rely on the installed RAFT API and just want clean build output.
 add_compile_definitions(RAFT_HIDE_DEPRECATION_WARNINGS)
-
-# --------------------------------------------------------
-# Debug info flag compatibility
-# --------------------------------------------------------
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-gdwarf-4" HAS_GDWARF4)
-if (HAS_GDWARF4)
-    add_compile_options("-gdwarf-4")
-else()
-    message(WARNING "Compiler/assembler does not support -gdwarf-4; disabling debug info with -g0")
-    add_compile_options("-g0")
-endif()
-# CUDA host compilation can still emit unsupported DWARF flags; force no debug
-add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-g0>)
 
 # ---- Language Standards ----
 set(CMAKE_CXX_STANDARD 17)
@@ -96,23 +28,10 @@ endif()
 set(CMAKE_LINK_DEPENDS_USE_LINKER FALSE)
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING "Use shared CUDA runtime" FORCE)
 set(CMAKE_CUDA_SEPARABLE_COMPILATION OFF)
-set(GCC_LIB_PATH "/apps/software/2024a/software/GCCcore/13.3.0/lib64")
-set(CMAKE_CUDA_ARCHITECTURES 89)
-# Pin the CUDA toolkit used everywhere (CUDAToolkit targets and legacy FindCUDA
-# inside gDel2D) to the system installation instead of the conda shim toolchain.
-set(CUDA_NVCC_EXECUTABLE "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc" CACHE FILEPATH "" FORCE)
-set(ENV{PATH} "${CUDA_TOOLKIT_ROOT_DIR}/bin:$ENV{PATH}")
-link_directories(/apps/software/2024a/software/CUDA/12.6.0/lib64)
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L/apps/software/2024a/software/CUDA/12.6.0/lib64")
-
-
-add_link_options("-L${GCC_LIB_PATH}" "-Wl,-rpath,${GCC_LIB_PATH}")
-# Keep the CUDA 12.6 toolchain libs ahead of any conda CUDA shims at runtime.
-set(CUDA_TOOLCHAIN_LIB "/apps/software/2024a/software/CUDA/12.6.0/lib64")
-add_link_options("-Wl,-rpath,${CUDA_TOOLCHAIN_LIB}")
-list(APPEND CMAKE_BUILD_RPATH "${CUDA_TOOLCHAIN_LIB}")
-list(APPEND CMAKE_INSTALL_RPATH "${CUDA_TOOLCHAIN_LIB}")
-set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86;89" CACHE STRING
+        "CUDA architectures to compile for" FORCE)
+endif()
 
 # Ensure the local vcpkg manifest install tree stays on CMAKE_PREFIX_PATH even
 # when users override it on the command line (needed for fmt, delaunator-cpp, etc.).
@@ -131,7 +50,6 @@ find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
-set(raft_DIR "/home/bh692/.conda/envs/py3/lib/cmake/raft")
 find_package(raft REQUIRED)
 
 # ---- Header-only Libs ----
@@ -190,13 +108,8 @@ if(NOT MPI_ALL_INCLUDES)
     endif()
 endif()
 
-# Method C: Hardcoded Fallback (Based on your cluster logs)
-if(NOT MPI_ALL_INCLUDES)
-    message(WARNING "Using hardcoded MPI path as fallback.")
-    list(APPEND MPI_ALL_INCLUDES "/apps/software/2024a/software/OpenMPI/5.0.3-GCC-13.3.0-CUDA-12.6.0/include")
-endif()
-
-# Apply globally so headers are found
+# MPI::MPI_CXX normally supplies these includes. The explicit list also makes
+# them visible while NVCC compiles CUDA translation units.
 include_directories(SYSTEM ${MPI_ALL_INCLUDES})
 
 # ---- Python Checks ----
@@ -262,7 +175,6 @@ target_link_libraries(md_particle_lib
         CUDA::cudart
 )
 set_target_properties(md_particle_lib PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
-target_link_directories(md_particle_lib PUBLIC /apps/software/2024a/software/CUDA/12.6.0/lib64)
 
 # ---- Tests ----
 file(GLOB_RECURSE TEST_SOURCES
@@ -284,8 +196,6 @@ foreach(test_src IN LISTS TEST_SOURCES)
             md_particle_lib
             MPI::MPI_CXX
     )
-    target_link_directories("${exe_name}" PRIVATE /apps/software/2024a/software/CUDA/12.6.0/lib64)
-
     target_include_directories("${exe_name}"
         PRIVATE
             "${PROJECT_ROOT}"
@@ -319,8 +229,6 @@ foreach(run_src IN LISTS RUN_SOURCES)
             md_particle_lib
             MPI::MPI_CXX
     )
-    target_link_directories("${exe_name}" PRIVATE /apps/software/2024a/software/CUDA/12.6.0/lib64)
-
     target_include_directories("${exe_name}"
         PRIVATE
             "${PROJECT_ROOT}"

@@ -1,12 +1,14 @@
 #!/bin/bash
-# Simple wrapper that sets PATH to py3 conda environment and runs Python
-# This works in subprocesses without needing to source conda
+# Run Python from a configurable Conda environment without hard-coded paths.
 
-# Set environment variables
-export CONDA_PREFIX="/home/bh692/.conda/envs/py3"
-export CONDA_DEFAULT_ENV="py3"
-export PATH="/home/bh692/.conda/envs/py3/bin:$PATH"
-export LD_LIBRARY_PATH="/home/bh692/.conda/envs/py3/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+set -euo pipefail
 
-# Execute Python with all arguments
+environment_name="${MD_CONDA_ENV:-py3}"
+if ! command -v conda >/dev/null 2>&1; then
+    echo "conda is not available; load or install it before running this wrapper" >&2
+    exit 1
+fi
+
+eval "$(conda shell.bash hook)"
+conda activate "$environment_name"
 exec python3 "$@"
